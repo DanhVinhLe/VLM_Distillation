@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from transformers import TrainingArguments
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -59,10 +59,10 @@ class DataArguments:
     encode_output_path: str = field(default=None, metadata={"help": "encode output path"})
     max_len: int = field(default=None, metadata={"help": "The maximum total input sequence length after tokenization. Use with caution, since it may truncate text prompts due to large image lengths."},)
     embedding_type: str = field(default="", metadata={"help": "embedding type"})
-    image_resolution: str = field(default=None, metadata={"help": "for models i.e. LLaVA-next and Qwen, resize images first, none means using original image resolution. This is only works when `--resize_use_processor false`."})
-    resize_use_processor: bool = field(default=False, metadata={"help": "Resize visual inputs insides processor, e.g. Qwen2VLImageProcessor, instead of by our code."})
-    resize_min_pixels: int = field(default=28*28*4, metadata={"help": "The min pixels of the image to resize the image. This is only works when `--resize_use_processor true`."})
-    resize_max_pixels: int = field(default=28*28*1280, metadata={"help": "The max pixels of the image to resize the image. This is only works when `--resize_use_processor true`."})
+    image_resolution: str = field(default=None, metadata={"help": "Optional coarse pre-resize cap before processor-specific image preprocessing."})
+    resize_use_processor: Optional[bool] = field(default=None, metadata={"help": "Override processor image resizing. Leave unset to keep the model processor default; set false only if image sizes are already processor-compatible."})
+    resize_min_pixels: int = field(default=28*28*4, metadata={"help": "Optional processor min_pixels override for processors that support it."})
+    resize_max_pixels: int = field(default=28*28*1280, metadata={"help": "Optional processor max_pixels override for processors that support it."})
     image_decay_factor: float = field(default=None, metadata={"help": "The image decay factor for resizing temporal images"})
     num_hardneg: int = field(default=0, metadata={"help": "hard negative number"})
     #! new args
