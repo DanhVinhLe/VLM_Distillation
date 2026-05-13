@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.json
+*.log
+*.jpg
+*.png
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.zip
+*.gif
+*.tar.gz
+*.tar
+*.egg-info/
+outputs/
