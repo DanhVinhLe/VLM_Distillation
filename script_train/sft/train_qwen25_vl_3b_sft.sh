@@ -27,7 +27,7 @@ fi
   --data_path "${DATA_PATH}" \
   --image_dir "${IMAGE_DIR}" \
   --output_dir "${OUTPUT_DIR}" \
-  --percent_data 0.01 \
+  --percent_data 1.0 \
   --lora true \
   --lora_r 128 \
   --lora_alpha 256 \
