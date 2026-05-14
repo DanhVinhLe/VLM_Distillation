@@ -582,7 +582,7 @@ class VlmDistillDataCollator:
                 inputs[key] = inputs[key].long()
         return inputs
 
-    def _add_labels(self, inputs: Dict[str, Any]) -> None:
+    def _add_labels(self, inputs: Dict[str, Any], processor=None) -> None:
         """
         Attach ``labels`` to *inputs* in-place.
 
@@ -590,8 +590,10 @@ class VlmDistillDataCollator:
         IGNORE_INDEX so the LM cross-entropy loss is computed only on the
         tokens the model is supposed to generate.
         """
+        if processor is None:
+            processor = self.student_processor
         inputs["labels"] = _make_labels_chatml(
-            inputs["input_ids"], self.student_processor, inputs.get("attention_mask")
+            inputs["input_ids"], processor, inputs.get("attention_mask")
         )
 
     def __call__(self, instances: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -617,13 +619,10 @@ class VlmDistillDataCollator:
                 return_offsets_mapping=self.use_sre_pooler,
             )
             teacher_offsets = teacher_inputs.pop("offset_mapping", None)
+            self._add_labels(teacher_inputs, self.teacher_processor)
 
             if self.use_sre_pooler and student_offsets is not None and teacher_offsets is not None:
-                teacher_labels = _make_labels_chatml(
-                    teacher_inputs["input_ids"],
-                    self.teacher_processor,
-                    teacher_inputs.get("attention_mask"),
-                )
+                teacher_labels = teacher_inputs["labels"]
                 student_starts = _first_supervised_token(student_inputs["labels"], student_inputs.get("attention_mask"))
                 teacher_starts = _first_supervised_token(teacher_labels, teacher_inputs.get("attention_mask"))
                 student_pooler, teacher_pooler = _prepare_sre_pooler(
