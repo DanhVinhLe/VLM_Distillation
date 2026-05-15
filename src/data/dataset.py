@@ -586,16 +586,22 @@ class VlmDistillDataCollator:
                 inputs[key] = inputs[key].long()
         return inputs
 
-    def _add_labels(self, inputs: Dict[str, Any]) -> None:
+    def _add_labels(self, inputs: Dict[str, Any], processor: Any = None) -> None:
         """
         Attach ``labels`` to *inputs* in-place.
 
         Positions that are not part of an assistant response are masked with
         IGNORE_INDEX so the LM cross-entropy loss is computed only on the
         tokens the model is supposed to generate.
+
+        ``processor`` defaults to the student processor; pass the teacher
+        processor when labelling teacher_inputs (their tokenizers can split
+        the assistant region differently and we need the indices to live in
+        each side's own coordinate system).
         """
+        processor = processor or self.student_processor
         inputs["labels"] = _make_labels_chatml(
-            inputs["input_ids"], self.student_processor, inputs.get("attention_mask")
+            inputs["input_ids"], processor, inputs.get("attention_mask")
         )
 
     def __call__(self, instances: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -622,14 +628,17 @@ class VlmDistillDataCollator:
             )
             teacher_offsets = teacher_inputs.pop("offset_mapping", None)
 
+            # Always attach labels to teacher_inputs. SCVA, CGKD, and any future
+            # criterion that wants to gate by "what was the teacher generating
+            # at this position" needs them. Previously only the SRE pooler
+            # branch computed them, leaving SCVA's response gate empty for
+            # `scva` / `cgkd` / `scva_cgkd` kd_loss_types and silently zeroing
+            # the SCVA term.
+            self._add_labels(teacher_inputs, processor=self.teacher_processor)
+
             if self.use_sre_pooler and student_offsets is not None and teacher_offsets is not None:
-                teacher_labels = _make_labels_chatml(
-                    teacher_inputs["input_ids"],
-                    self.teacher_processor,
-                    teacher_inputs.get("attention_mask"),
-                )
                 student_starts = _first_supervised_token(student_inputs["labels"], student_inputs.get("attention_mask"))
-                teacher_starts = _first_supervised_token(teacher_labels, teacher_inputs.get("attention_mask"))
+                teacher_starts = _first_supervised_token(teacher_inputs["labels"], teacher_inputs.get("attention_mask"))
                 student_pooler, teacher_pooler = _prepare_sre_pooler(
                     student_starts,
                     student_offsets,

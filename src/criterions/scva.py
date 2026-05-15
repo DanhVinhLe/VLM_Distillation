@@ -159,7 +159,10 @@ class SCVACriterion(nn.Module):
             "skipped_mask": 0,
             "skipped_attention": 0,
             "skipped_token_mismatch": 0,
-            "skipped_labels": 0,
+            "skipped_no_teacher_labels": 0,
+            "skipped_no_student_labels": 0,
+            "skipped_empty_teacher_response": 0,
+            "skipped_empty_student_response": 0,
         }
         self._last_scva_counts = counts
 
@@ -207,13 +210,19 @@ class SCVACriterion(nn.Module):
             s_v_idx = s_v_mask.nonzero(as_tuple=True)[0]
             n_v = int(t_v_idx.numel())
 
-            if t_labels is None or s_labels is None:
-                counts["skipped_labels"] += 1
+            if t_labels is None:
+                counts["skipped_no_teacher_labels"] += 1
+                continue
+            if s_labels is None:
+                counts["skipped_no_student_labels"] += 1
                 continue
             t_r_idx = (t_labels[b].to(teacher_hidden.device) != IGNORE_INDEX).nonzero(as_tuple=True)[0]
             s_r_idx = (s_labels[b].to(teacher_hidden.device) != IGNORE_INDEX).nonzero(as_tuple=True)[0]
-            if t_r_idx.numel() == 0 or s_r_idx.numel() == 0:
-                counts["skipped_labels"] += 1
+            if t_r_idx.numel() == 0:
+                counts["skipped_empty_teacher_response"] += 1
+                continue
+            if s_r_idx.numel() == 0:
+                counts["skipped_empty_student_response"] += 1
                 continue
 
             # K-means cluster teacher vision-token hidden states (no grad).
