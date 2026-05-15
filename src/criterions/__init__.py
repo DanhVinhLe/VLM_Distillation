@@ -1,24 +1,30 @@
+from src.criterions.ce_only import CEOnlyCriterion
 from src.criterions.default_distillation import (
     DefaultDistillationCriterion,
     default_distillation_criterion,
 )
 from src.criterions.em_kd import EMKDCriterion
 from src.criterions.sre import SRECriterion
+from src.criterions.unit_aligned import UnitAlignedDistillationCriterion
 
 
 criterion_list = {
+    "ce_only": CEOnlyCriterion,
     "default": DefaultDistillationCriterion,
     "default_distillation": DefaultDistillationCriterion,
     "emkd": EMKDCriterion,
     "em_kd": EMKDCriterion,
     "sre": SRECriterion,
+    "joint": UnitAlignedDistillationCriterion,
+    "unit_aligned": UnitAlignedDistillationCriterion,
+    "unit_aligned_distillation": UnitAlignedDistillationCriterion,
 }
 
 
 def build_criterion(training_args):
     kd_loss_type = getattr(training_args, "kd_loss_type", None)
     if kd_loss_type in (None, ""):
-        kd_loss_type = "default"
+        kd_loss_type = "ce_only"
 
     if kd_loss_type in criterion_list:
         return criterion_list[kd_loss_type](training_args)
@@ -28,8 +34,10 @@ def build_criterion(training_args):
 
 __all__ = [
     "DefaultDistillationCriterion",
+    "CEOnlyCriterion",
     "EMKDCriterion",
     "SRECriterion",
+    "UnitAlignedDistillationCriterion",
     "build_criterion",
     "criterion_list",
     "default_distillation_criterion",

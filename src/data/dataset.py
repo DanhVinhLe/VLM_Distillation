@@ -545,7 +545,11 @@ class VlmDistillDataCollator:
         # kd_loss_type lives on TrainingArguments, which this collator does not
         # receive.  train.py sets this attribute on data_args before building
         # the data module.
-        self.use_sre_pooler = bool(_get_arg(self.data_args, "kd_loss_type") == "sre" and self.use_teacher)
+        kd_loss_type = _get_arg(self.data_args, "kd_loss_type")
+        self.use_sre_pooler = bool(
+            kd_loss_type in {"sre", "joint", "unit_aligned", "unit_aligned_distillation"}
+            and self.use_teacher
+        )
 
     def _apply_processor(
         self,

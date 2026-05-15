@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
+from src.utils import print_rank
+
 
 IGNORE_INDEX = -100
 
@@ -62,6 +64,18 @@ def _mask_for_sample(mask: Optional[torch.Tensor], index: int, hidden: torch.Ten
     return mask[index].to(device=hidden.device, dtype=torch.bool)
 
 
+def _limit_tokens(hidden: torch.Tensor, max_tokens: int) -> torch.Tensor:
+    if max_tokens is None or max_tokens <= 0 or hidden.shape[0] <= max_tokens:
+        return hidden
+    idx = torch.linspace(
+        0,
+        hidden.shape[0] - 1,
+        steps=max_tokens,
+        device=hidden.device,
+    ).round().long()
+    return hidden.index_select(0, idx)
+
+
 def _matched_response_logits(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
@@ -93,10 +107,12 @@ class EMKDCriterion(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.alpha = 0.5
-        self.beta = 0.25
-        self.gamma = 25.0
-        self.temperature = 1.0
+        self.alpha = float(getattr(args, "em_kd_alpha", 0.5))
+        self.beta = float(getattr(args, "em_kd_beta", 0.25))
+        self.gamma = float(getattr(args, "em_kd_gamma", 25.0))
+        self.temperature = float(getattr(args, "em_kd_temperature", 1.0))
+        self.max_vision_tokens = int(getattr(args, "em_kd_max_vision_tokens", 512) or 0)
+        self.max_text_tokens = int(getattr(args, "em_kd_max_text_tokens", 1024) or 0)
 
     def forward(self, distiller: Any, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         student_inputs = batch["student_inputs"]
@@ -105,12 +121,22 @@ class EMKDCriterion(nn.Module):
             raise RuntimeError("teacher_inputs are missing while running EM-KD.")
 
         student_outputs = distiller.student(**student_inputs)
+        with torch.no_grad():
+            teacher_outputs = distiller.teacher(**teacher_inputs)
+
+        return self.compute_losses(distiller, student_outputs, teacher_outputs, student_inputs, teacher_inputs)
+
+    def compute_losses(
+        self,
+        distiller: Any,
+        student_outputs,
+        teacher_outputs,
+        student_inputs: Dict[str, Any],
+        teacher_inputs: Dict[str, Any],
+    ) -> Dict[str, torch.Tensor]:
         supervised_loss = student_outputs.loss
         if supervised_loss is None:
             raise RuntimeError("Student model did not return CE loss; labels may be missing.")
-
-        with torch.no_grad():
-            teacher_outputs = distiller.teacher(**teacher_inputs)
 
         response_loss = self._response_logit_distillation(student_outputs, teacher_outputs, student_inputs)
         vision_loss, vision_logit_loss, affinity_loss, matched_count = self._vision_distillation(
@@ -166,13 +192,13 @@ class EMKDCriterion(nn.Module):
             tt_mask = _mask_for_sample(teacher_text_mask, i, teacher_hidden)
 
             if not (sv_mask.any() and tv_mask.any() and st_mask.any() and tt_mask.any()):
-                print(f"Warning: sample {i} has empty vision/text masks; skipping vision KD for this sample.")
+                print_rank(f"Warning: sample {i} has empty vision/text masks; skipping vision KD for this sample.")
                 continue
 
-            vhs_s = student_hidden[i][sv_mask]
-            vhs_t = teacher_hidden[i][tv_mask]
-            lhs_s = student_hidden[i][st_mask]
-            lhs_t = teacher_hidden[i][tt_mask]
+            vhs_s = _limit_tokens(student_hidden[i][sv_mask], self.max_vision_tokens)
+            vhs_t = _limit_tokens(teacher_hidden[i][tv_mask], self.max_vision_tokens)
+            lhs_s = _limit_tokens(student_hidden[i][st_mask], self.max_text_tokens)
+            lhs_t = _limit_tokens(teacher_hidden[i][tt_mask], self.max_text_tokens)
 
             vl_s, vl_t = _crop_last_dim(student_head(vhs_s), teacher_head(vhs_t))
             with torch.no_grad():

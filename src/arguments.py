@@ -96,15 +96,15 @@ class TrainingArguments(TrainingArguments):
     #!new args
     gc_dynamic_limit: int = field(default=125, metadata={"help": "gc_chunk default limit - (128, 125) sized matrices works for Qwen2b. gc_dynamic_limit would be 125 and gc_p|q_chunk_size would be 128"})
     #!new kd loss weight
-    kd_weight: float = field(default=0.01, metadata={"help": "weight of kd loss in total loss"})
-    rkd_distance_weight: float = field(default=1.0, metadata={"help": "weight of distance loss in total kd loss"})
-    rkd_angle_weight: float = field(default=2.0, metadata={"help": "weight of angle loss in total kd loss"})
-    kd_loss_type: str = field(default="contrastive_rkd", metadata={"help": "type of kd loss, current only support RKD"})
+    kd_weight: float = field(default=0.01, metadata={"help": "weight of kd loss in total loss (used by `default` criterion)"})
+    kd_loss_type: str = field(default="ce_only", metadata={"help": "kd criterion: one of {ce_only, default, default_distillation, emkd, em_kd, sre, joint, unit_aligned}"})
     # emkd loss weight
     em_kd_alpha: float = field(default=0.5, metadata={"help": "EM-KD weight for supervised CE loss"})
     em_kd_beta: float = field(default=0.25, metadata={"help": "EM-KD weight for matched vision-logit distillation"})
     em_kd_gamma: float = field(default=25.0, metadata={"help": "EM-KD weight for vision-language affinity distillation"})
     em_kd_temperature: float = field(default=1.0, metadata={"help": "Temperature used by EM-KD reverse KL losses"})
+    em_kd_max_vision_tokens: int = field(default=512, metadata={"help": "Max vision tokens per side for EM-KD Hungarian matching; <=0 disables cap"})
+    em_kd_max_text_tokens: int = field(default=1024, metadata={"help": "Max text tokens per side for EM-KD affinity matrices; <=0 disables cap"})
     # sre loss weight
     sre_alpha: float = field(default=0.5, metadata={"help": "SRE weight for supervised CE loss"})
     sre_p: float = field(default=1.0, metadata={"help": "SRE token-weight exponent"})
@@ -112,6 +112,11 @@ class TrainingArguments(TrainingArguments):
     sre_geom_loss_weight: float = field(default=50, metadata={"help": "SRE geometry affinity loss weight"})
     sre_logit_loss_weight: float = field(default=1.0, metadata={"help": "SRE soft-label logit distillation loss weight"})
     sre_temperature: float = field(default=2.0, metadata={"help": "SRE soft-label distillation temperature"})
+    sre_use_projector: bool = field(default=False, metadata={"help": "Use configured student-to-teacher projectors for SRE hidden-state losses instead of cropping to min dim."})
+    # joint criterion weights
+    joint_ce_weight: float = field(default=0.5, metadata={"help": "CE weight inside the `joint` criterion; remaining weight goes to averaged KD terms."})
+    joint_emkd_weight: float = field(default=1.0, metadata={"help": "Weight of EM-KD term inside the `joint` criterion."})
+    joint_sre_weight: float = field(default=1.0, metadata={"help": "Weight of SRE term inside the `joint` criterion."})
     ds_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
     deepspeed_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
     # new args for span loss

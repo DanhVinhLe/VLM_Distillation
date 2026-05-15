@@ -166,16 +166,46 @@ def _pool_hidden_states_with_weights(
     return pooled, span_token_weights.sum(dim=2)
 
 
-def _weighted_cosine_loss(student_hidden: torch.Tensor, teacher_hidden: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-    student_hidden, teacher_hidden = _crop_last_dim(student_hidden, teacher_hidden)
+def _align_hidden_dims(
+    student_hidden: torch.Tensor,
+    teacher_hidden: torch.Tensor,
+    projector: Optional[nn.Module] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Bring student and teacher hidden states to a common dimension.
+
+    With a projector, student is linearly mapped into teacher_dim; this is the
+    principled path used by the paper. Without one, fall back to cropping the
+    larger side to ``min(student_dim, teacher_dim)`` for backwards compat with
+    legacy configs (kept only as a safety net; not recommended for new runs).
+    """
+    if projector is not None:
+        target_dtype = next(projector.parameters()).dtype
+        student_hidden = projector(student_hidden.to(target_dtype)).to(torch.float32)
+        teacher_hidden = teacher_hidden.to(device=student_hidden.device, dtype=torch.float32)
+        return student_hidden, teacher_hidden
+    return _crop_last_dim(student_hidden, teacher_hidden)
+
+
+def _weighted_cosine_loss(
+    student_hidden: torch.Tensor,
+    teacher_hidden: torch.Tensor,
+    weights: torch.Tensor,
+    projector: Optional[nn.Module] = None,
+) -> torch.Tensor:
+    student_hidden, teacher_hidden = _align_hidden_dims(student_hidden, teacher_hidden, projector)
     student_hidden = F.normalize(student_hidden.float(), dim=-1, eps=1e-5)
     teacher_hidden = F.normalize(teacher_hidden.float(), dim=-1, eps=1e-5)
     per_token = 1.0 - (student_hidden * teacher_hidden).sum(dim=-1)
     return (per_token * weights.to(per_token.device)).sum() / student_hidden.shape[0]
 
 
-def _geometry_loss(student_hidden: torch.Tensor, teacher_hidden: torch.Tensor, pair_weights: torch.Tensor) -> torch.Tensor:
-    student_hidden, teacher_hidden = _crop_last_dim(student_hidden, teacher_hidden)
+def _geometry_loss(
+    student_hidden: torch.Tensor,
+    teacher_hidden: torch.Tensor,
+    pair_weights: torch.Tensor,
+    projector: Optional[nn.Module] = None,
+) -> torch.Tensor:
+    student_hidden, teacher_hidden = _align_hidden_dims(student_hidden, teacher_hidden, projector)
     student_hidden = F.normalize(student_hidden.float(), dim=-1, eps=1e-5)
     teacher_hidden = F.normalize(teacher_hidden.float(), dim=-1, eps=1e-5)
     student_scores = torch.matmul(student_hidden, student_hidden.transpose(-1, -2))
@@ -218,8 +248,25 @@ class SRECriterion(nn.Module):
         self.geom_loss_weight = float(getattr(args, "sre_geom_loss_weight", 50))
         self.logit_loss_weight = float(getattr(args, "sre_logit_loss_weight", 1.0))
         self.temperature = float(getattr(args, "sre_temperature", 2.0))
+        self.use_projector = bool(getattr(args, "sre_use_projector", False))
         self._shared_vocab_cpu = None
         self._shared_vocab_cache = {}
+
+    def _get_projector(self, distiller: Any, idx: int) -> Optional[nn.Module]:
+        if not self.use_projector:
+            return None
+        projectors = getattr(distiller, "projectors", None)
+        if projectors is None or len(projectors) == 0:
+            return None
+        # Layer-mapping-aware lookup: idx maps to projector position when mapping is
+        # non-empty; otherwise fall back to the single default projector.
+        if isinstance(projectors, nn.ModuleList):
+            if idx < len(projectors):
+                return projectors[idx]
+            return projectors[0]
+        # nn.ModuleDict (projector_config_path mode) is not supported by SRE
+        # directly; caller should configure layer_mapping path.
+        return None
 
     @staticmethod
     def _processor_tokenizer(processor):
@@ -311,12 +358,22 @@ class SRECriterion(nn.Module):
             raise RuntimeError("teacher_inputs are missing while running SRE.")
 
         student_outputs = distiller.student(**student_inputs)
+        with torch.no_grad():
+            teacher_outputs = distiller.teacher(**teacher_inputs)
+
+        return self.compute_losses(distiller, student_outputs, teacher_outputs, student_inputs, teacher_inputs)
+
+    def compute_losses(
+        self,
+        distiller: Any,
+        student_outputs,
+        teacher_outputs,
+        student_inputs: Dict[str, Any],
+        teacher_inputs: Dict[str, Any],
+    ) -> Dict[str, torch.Tensor]:
         hard_loss = student_outputs.loss
         if hard_loss is None:
             raise RuntimeError("Student model did not return CE loss; labels may be missing.")
-
-        with torch.no_grad():
-            teacher_outputs = distiller.teacher(**teacher_inputs)
 
         kd_loss, span_loss, geom_loss, logit_loss = self._knowledge_distillation_loss(
             distiller, student_outputs, teacher_outputs, student_inputs, teacher_inputs
@@ -342,8 +399,13 @@ class SRECriterion(nn.Module):
         token_weights = _token_weights(student_outputs, student_inputs, seq_len, self.p).to(student_last.device)
         pair_weights = _pair_weights(token_weights)
 
-        span_loss = self._span_loss(student_outputs, teacher_outputs, token_weights, seq_len)
-        geom_loss = _geometry_loss(student_last, teacher_last.to(student_last.device), pair_weights)
+        span_loss = self._span_loss(distiller, student_outputs, teacher_outputs, token_weights, seq_len)
+        # Geometry projects student to teacher_dim with the same last-layer
+        # projector used by the span loss; falls back to crop when missing.
+        geom_projector = self._get_projector(distiller, idx=-1)
+        geom_loss = _geometry_loss(
+            student_last, teacher_last.to(student_last.device), pair_weights, projector=geom_projector
+        )
 
         student_logits, teacher_logits, _ = _crop_seq_only(student_outputs.logits, teacher_outputs.logits)
         logit_loss = self._aligned_soft_label_loss(distiller, student_logits, teacher_logits, token_weights.gt(0))
@@ -364,6 +426,7 @@ class SRECriterion(nn.Module):
 
     def _span_pooled_distillation_loss(self, distiller, student_outputs, teacher_outputs, student_inputs, teacher_inputs):
         span_loss, student_last, teacher_last, span_weights = self._span_pooled_hidden_loss(
+            distiller,
             student_outputs,
             teacher_outputs,
             student_inputs,
@@ -371,7 +434,13 @@ class SRECriterion(nn.Module):
         )
         span_weights = span_weights.to(student_last.device)
         pair_weights = _pair_weights(span_weights)
-        geom_loss = _geometry_loss(student_last, teacher_last.to(student_last.device), pair_weights)
+        geom_projector = self._get_projector(distiller, idx=-1)
+        geom_loss = _geometry_loss(
+            student_last,
+            teacher_last.to(student_last.device),
+            pair_weights,
+            projector=geom_projector,
+        )
 
         student_logits = _get_output_head(distiller.student)(student_last)
         teacher_logits = _get_output_head(distiller.teacher)(teacher_last)
@@ -397,6 +466,7 @@ class SRECriterion(nn.Module):
 
     def _span_pooled_hidden_loss(
         self,
+        distiller: Any,
         student_outputs,
         teacher_outputs,
         student_inputs: Dict[str, Any],
@@ -439,8 +509,19 @@ class SRECriterion(nn.Module):
                 _layer_attention(teacher_outputs, teacher_layer),
             )
             layer_weights = _normalize_weights(teacher_span_weights, self.p).to(student_hidden.device)
-            losses.append(_weighted_cosine_loss(student_hidden, teacher_hidden.to(student_hidden.device), layer_weights))
+            projector = self._get_projector(distiller, idx)
+            losses.append(
+                _weighted_cosine_loss(
+                    student_hidden,
+                    teacher_hidden.to(student_hidden.device),
+                    layer_weights,
+                    projector=projector,
+                )
+            )
             if idx == len(student_layers) - 1:
+                # Keep student_last in *student* hidden dim so the downstream
+                # logit head (student.lm_head) and a separately-applied geometry
+                # projector both see compatible inputs.
                 student_last = student_hidden
                 teacher_last = teacher_hidden
                 span_weights = layer_weights
@@ -451,6 +532,7 @@ class SRECriterion(nn.Module):
 
     def _span_loss(
         self,
+        distiller: Any,
         student_outputs,
         teacher_outputs,
         token_weights,
@@ -464,10 +546,18 @@ class SRECriterion(nn.Module):
         student_layers, teacher_layers = self._mapped_layers(student_hidden_states, teacher_hidden_states)
 
         losses = []
-        for student_layer, teacher_layer in zip(student_layers, teacher_layers):
+        for idx, (student_layer, teacher_layer) in enumerate(zip(student_layers, teacher_layers)):
             student_hidden = student_hidden_states[student_layer][:, -seq_len:]
             teacher_hidden = teacher_hidden_states[teacher_layer][:, -seq_len:]
-            losses.append(_weighted_cosine_loss(student_hidden, teacher_hidden.to(student_hidden.device), token_weights))
+            projector = self._get_projector(distiller, idx)
+            losses.append(
+                _weighted_cosine_loss(
+                    student_hidden,
+                    teacher_hidden.to(student_hidden.device),
+                    token_weights,
+                    projector=projector,
+                )
+            )
 
         layer_weights = self._hidden_layer_weights(len(losses), losses[0].device)
         return sum(weight * loss for weight, loss in zip(layer_weights, losses))
