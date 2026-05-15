@@ -16,6 +16,7 @@ PERCENT_DATA="${PERCENT_DATA:-0.10}"
 PER_DEVICE_BS="${PER_DEVICE_BS:-2}"
 GRAD_ACCUM="${GRAD_ACCUM:-8}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-2}"
+SAVE_STEPS="${SAVE_STEPS:-1000}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 MASTER_PORT="${MASTER_PORT:-29501}"
@@ -48,7 +49,8 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --warmup_ratio 0.03 \
   --lr_scheduler_type cosine \
   --bf16 true \
-  --save_strategy epoch \
+  --save_strategy steps \
+  --save_steps "${SAVE_STEPS}" \
   --save_total_limit 2 \
   --logging_steps 50 \
   --dataloader_num_workers "${DATALOADER_WORKERS}" \

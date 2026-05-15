@@ -46,7 +46,8 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --warmup_ratio 0.03 \
   --lr_scheduler_type cosine \
   --bf16 true \
-  --save_strategy epoch \
+  --save_strategy steps \
+  --save_steps "${SAVE_STEPS}" \
   --save_total_limit 2 \
   --logging_steps 50 \
   --dataloader_num_workers "${DATALOADER_WORKERS}" \
