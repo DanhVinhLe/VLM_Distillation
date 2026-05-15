@@ -129,11 +129,19 @@ class SCVACriterion(nn.Module):
 
         scva_kd = self._scva_loss(student_outputs, teacher_outputs, student_inputs, teacher_inputs)
         total = self.alpha * ce + (1.0 - self.alpha) * self.weight * scva_kd
-        return {
+        out: Dict[str, torch.Tensor] = {
             "loss": total,
             "hard_loss": ce.detach(),
             "scva_loss": scva_kd.detach(),
         }
+        out.update(self._scalarize_counts(ce))
+        return out
+
+    def _scalarize_counts(self, like: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Convert the per-step validity counters into bf16-safe scalar tensors
+        (so DistillTrainer.log can mean-reduce them across micro-batches)."""
+        counts = getattr(self, "_last_scva_counts", None) or {}
+        return {f"scva_{k}": like.new_tensor(float(v)) for k, v in counts.items()}
 
     def _scva_loss(
         self,
@@ -142,20 +150,36 @@ class SCVACriterion(nn.Module):
         student_inputs: Dict[str, Any],
         teacher_inputs: Dict[str, Any],
     ) -> torch.Tensor:
+        # Track per-call validity counts; surfaced via _scalarize_counts so the
+        # trainer.log() hook can write `train/scva_valid`, `train/scva_skipped_*`
+        # to WandB. If `scva_valid` stays at 0 for the whole smoke, SCVA is
+        # silently inactive — that's the methodology blocker we want to detect.
+        counts: Dict[str, int] = {
+            "valid": 0,
+            "skipped_mask": 0,
+            "skipped_attention": 0,
+            "skipped_token_mismatch": 0,
+            "skipped_labels": 0,
+        }
+        self._last_scva_counts = counts
+
         teacher_hidden = _last_hidden(teacher_outputs)        # [B, L_t, D]
         teacher_vision_mask = getattr(teacher_outputs, "vision_feature_mask", None)
         student_vision_mask = getattr(student_outputs, "vision_feature_mask", None)
         if teacher_vision_mask is None or student_vision_mask is None:
+            counts["skipped_mask"] = int(teacher_hidden.shape[0])
             return teacher_hidden.new_zeros(())
 
         t_attns = getattr(teacher_outputs, "attentions", None)
         s_attns = getattr(student_outputs, "attentions", None)
         if not t_attns or not s_attns:
+            counts["skipped_attention"] = int(teacher_hidden.shape[0])
             return teacher_hidden.new_zeros(())
 
         t_layer = _resolve_layer(t_attns, self.attention_layer)
         s_layer = _resolve_layer(s_attns, self.attention_layer)
         if t_layer < 0 or s_layer < 0:
+            counts["skipped_attention"] = int(teacher_hidden.shape[0])
             return teacher_hidden.new_zeros(())
 
         # Head-averaged attention. Use float for KL stability.
@@ -170,11 +194,13 @@ class SCVACriterion(nn.Module):
             t_v_mask = teacher_vision_mask[b].to(device=teacher_hidden.device, dtype=torch.bool)
             s_v_mask = student_vision_mask[b].to(device=teacher_hidden.device, dtype=torch.bool)
             if t_v_mask.sum().item() < self.min_vision_tokens or s_v_mask.sum().item() < self.min_vision_tokens:
+                counts["skipped_mask"] += 1
                 continue
             if t_v_mask.sum().item() != s_v_mask.sum().item():
                 # Index-aligned SCVA requires same n_v on both sides. Skip
                 # mismatched samples (cross-architecture pairs need a separate
                 # remapping path, out of scope here).
+                counts["skipped_token_mismatch"] += 1
                 continue
 
             t_v_idx = t_v_mask.nonzero(as_tuple=True)[0]
@@ -182,10 +208,12 @@ class SCVACriterion(nn.Module):
             n_v = int(t_v_idx.numel())
 
             if t_labels is None or s_labels is None:
+                counts["skipped_labels"] += 1
                 continue
             t_r_idx = (t_labels[b].to(teacher_hidden.device) != IGNORE_INDEX).nonzero(as_tuple=True)[0]
             s_r_idx = (s_labels[b].to(teacher_hidden.device) != IGNORE_INDEX).nonzero(as_tuple=True)[0]
             if t_r_idx.numel() == 0 or s_r_idx.numel() == 0:
+                counts["skipped_labels"] += 1
                 continue
 
             # K-means cluster teacher vision-token hidden states (no grad).
@@ -221,6 +249,7 @@ class SCVACriterion(nn.Module):
 
             kl = F.kl_div(r_S.log(), r_T, reduction="none").sum(dim=-1)        # [T_aligned]
             sample_losses.append((u * kl).sum() / u.sum().clamp_min(1e-6))
+            counts["valid"] += 1
 
         if not sample_losses:
             return teacher_hidden.new_zeros(())

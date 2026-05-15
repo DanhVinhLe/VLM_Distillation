@@ -50,9 +50,12 @@ class SCVACGKDCriterion(nn.Module):
         cgkd_kd = self.cgkd._cgkd_loss(student_outputs, teacher_outputs, student_inputs)
 
         total = self.ce_weight * ce + self.lambda_v * scva_kd + self.lambda_g * cgkd_kd
-        return {
+        out: Dict[str, torch.Tensor] = {
             "loss": total,
             "hard_loss": ce.detach(),
             "scva_loss": scva_kd.detach(),
             "cgkd_loss": cgkd_kd.detach(),
         }
+        # Propagate SCVA validity counters set by SCVACriterion._scva_loss above.
+        out.update(self.scva._scalarize_counts(ce))
+        return out

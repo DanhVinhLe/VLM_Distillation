@@ -38,8 +38,8 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --lora_r 128 \
   --lora_alpha 256 \
   --lora_dropout 0.05 \
-  --per_device_train_batch_size 1 \
-  --gradient_accumulation_steps 8 \
+  --per_device_train_batch_size "${PER_DEVICE_BS}" \
+  --gradient_accumulation_steps "${GRAD_ACCUM}" \
   --num_train_epochs 1 \
   --learning_rate 1e-5 \
   --weight_decay 0.0 \

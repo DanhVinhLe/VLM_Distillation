@@ -53,6 +53,24 @@ class Distiller(nn.Module):
         self.load_projectors_if_needed()
         print_master("Projectors set.")
 
+    # HF Trainer's save_model + push_to_hub reach for model.config / name_or_path /
+    # generation_config when building the saved model card and the hub commit. The
+    # Distiller wraps a student VLMModel, which holds those attributes on its
+    # encoder. Proxy through so downstream HF code finds them on the student.
+
+    @property
+    def config(self):
+        return getattr(self.student, "config", None) or getattr(getattr(self.student, "encoder", None), "config", None)
+
+    @property
+    def generation_config(self):
+        encoder = getattr(self.student, "encoder", None)
+        return getattr(encoder, "generation_config", None) if encoder is not None else None
+
+    @property
+    def name_or_path(self):
+        return getattr(self.model_args, "model_name", "") or ""
+
     # ------------------------------------------------------------------
     # Model loading
     # ------------------------------------------------------------------

@@ -65,12 +65,36 @@ class DistillTrainer(Trainer):
 
         self._is_ddp = dist.is_initialized()
 
+        # Accumulators for criterion-side metrics. compute_loss is called once
+        # per micro-batch; we average across grad_accum_steps and emit at the
+        # next logging step via our `log()` override below.
+        self._kd_metric_sums: Dict[str, float] = {}
+        self._kd_metric_count: int = 0
+
     # ------------------------------------------------------------------
     # Column removal — disabled; our batches are nested dicts
     # ------------------------------------------------------------------
 
     def _remove_unused_columns(self, dataset, description=None):
         return dataset
+
+    # ------------------------------------------------------------------
+    # Component-metric logging
+    # ------------------------------------------------------------------
+
+    def log(self, logs: Dict[str, Any], *args, **kwargs):
+        """Inject accumulated criterion-side metrics into each periodic log.
+
+        HF Trainer's `_maybe_log_save_evaluate` calls `self.log(logs)` at
+        `args.logging_steps`. We hook here so SCVA / CGKD / hard_loss /
+        validity counters land in WandB at every visible step.
+        """
+        if self._kd_metric_count > 0:
+            for key, total in self._kd_metric_sums.items():
+                logs[f"train/{key}"] = total / self._kd_metric_count
+            self._kd_metric_sums.clear()
+            self._kd_metric_count = 0
+        return super().log(logs, *args, **kwargs)
 
     # ------------------------------------------------------------------
     # Loss
@@ -82,6 +106,24 @@ class DistillTrainer(Trainer):
             # student_inputs["labels"] for assistant-position gating.
             loss_output = model(self.criterion, inputs)
             loss = loss_output["loss"] if isinstance(loss_output, dict) else loss_output
+
+            # Accumulate component metrics (everything in the dict except "loss")
+            # for the next call to `log()`. This is how SCVA/CGKD/hard_loss/
+            # scva_valid_* surface in WandB and verifies the headline method is
+            # actually contributing, not silently zeroed.
+            if isinstance(loss_output, dict):
+                for key, value in loss_output.items():
+                    if key == "loss":
+                        continue
+                    if torch.is_tensor(value):
+                        if value.numel() == 0:
+                            continue
+                        scalar = value.detach().float().mean().item()
+                    else:
+                        scalar = float(value)
+                    self._kd_metric_sums[key] = self._kd_metric_sums.get(key, 0.0) + scalar
+                self._kd_metric_count += 1
+
             return (loss, None) if return_outputs else loss
 
         # SFT mode: forward through student model only.
