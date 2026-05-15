@@ -1,6 +1,10 @@
 .venv/
 __pycache__/
+.env
+.env.local
 *.json
+!configs/**/*.json
+!projector_config*.json
 *.log
 *.jpg
 *.png

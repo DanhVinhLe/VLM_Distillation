@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
+# CE-only baseline (teacher in batch, KD discarded) — DeepSpeed ZeRO-2 multi-GPU.
+# Launch:   NPROC_PER_NODE=4 bash script_train/ce_only/train_..._ce_only_ds2.sh
+# Tight VRAM? Switch with: DS_CONFIG="${PROJECT_DIR}/configs/ds_z2_offload.json"
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/workspace/ComfyUI/models/instantid/VLM_Distill}"
 TRAIN_PY="${PROJECT_DIR}/train.py"
 TORCHRUN="${PROJECT_DIR}/.venv/bin/torchrun"
+DS_CONFIG="${DS_CONFIG:-${PROJECT_DIR}/configs/ds_z2.json}"
 
 STUDENT_MODEL="${STUDENT_MODEL:-Qwen/Qwen2-VL-2B-Instruct}"
 TEACHER_MODEL="${TEACHER_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
 DATA_PATH="${DATA_PATH:-${PROJECT_DIR}/train_data/llava_v1_5_mix665k.json}"
 IMAGE_DIR="${IMAGE_DIR:-${PROJECT_DIR}/train_data}"
-RUN_NAME="${RUN_NAME:-qwen25_teacher_7b_qwen2_student_2b_emkd}"
+RUN_NAME="${RUN_NAME:-qwen25_teacher_7b_qwen2_student_2b_ce_only_ds2}"
 OUTPUT_DIR="${PROJECT_DIR}/outputs/${RUN_NAME}"
 PERCENT_DATA="${PERCENT_DATA:-0.15}"
 
-NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 MASTER_PORT="${MASTER_PORT:-29501}"
 
 cd "${PROJECT_DIR}"
@@ -53,11 +57,6 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --resume_from none \
   --report_to "${REPORT_TO}" \
   --seed 1337 \
-  --kd_loss_type emkd \
-  --em_kd_alpha 0.5 \
-  --em_kd_beta 0.25 \
-  --em_kd_gamma 25.0 \
-  --em_kd_temperature 1.0 \
-  --em_kd_max_vision_tokens 512 \
-  --em_kd_max_text_tokens 1024 \
+  --kd_loss_type ce_only \
+  --ds_config "${DS_CONFIG}" \
   ${HUB_FLAGS[@]+"${HUB_FLAGS[@]}"}
