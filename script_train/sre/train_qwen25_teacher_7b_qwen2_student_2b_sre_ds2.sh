@@ -18,7 +18,7 @@ DATA_PATH="${DATA_PATH:-${PROJECT_DIR}/train_data/llava_v1_5_mix665k.json}"
 IMAGE_DIR="${IMAGE_DIR:-${PROJECT_DIR}/train_data}"
 RUN_NAME="${RUN_NAME:-qwen25_teacher_7b_qwen2_student_2b_sre_ds2}"
 OUTPUT_DIR="${PROJECT_DIR}/outputs/${RUN_NAME}"
-PERCENT_DATA="${PERCENT_DATA:-0.15}"
+PERCENT_DATA="${PERCENT_DATA:-0.10}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 MASTER_PORT="${MASTER_PORT:-29501}"
@@ -40,8 +40,8 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --output_dir "${OUTPUT_DIR}" \
   --percent_data "${PERCENT_DATA}" \
   --lora true \
-  --lora_r 64 \
-  --lora_alpha 64 \
+  --lora_r 128 \
+  --lora_alpha 256 \
   --lora_dropout 0.05 \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 8 \
@@ -56,7 +56,7 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --logging_steps 50 \
   --dataloader_num_workers 2 \
   --max_len 2048 \
-  --image_resolution mid \
+  --image_resolution low \
   --resume_from none \
   --report_to "${REPORT_TO}" \
   --seed 1337 \

@@ -47,6 +47,54 @@ class KDPlumbingTests(unittest.TestCase):
 
         self.assertTrue(collator.use_sre_pooler)
 
+    def test_scva_reads_cluster_arguments(self):
+        from src.criterions.scva import SCVACriterion
+
+        args = SimpleNamespace(
+            scva_alpha=0.6,
+            scva_weight=2.0,
+            scva_n_clusters=24,
+            scva_kmeans_iters=15,
+            scva_attention_layer=-2,
+            scva_min_vision_tokens=8,
+        )
+        criterion = SCVACriterion(args)
+        self.assertEqual(criterion.alpha, 0.6)
+        self.assertEqual(criterion.weight, 2.0)
+        self.assertEqual(criterion.n_clusters, 24)
+        self.assertEqual(criterion.kmeans_iters, 15)
+        self.assertEqual(criterion.attention_layer, -2)
+        self.assertEqual(criterion.min_vision_tokens, 8)
+
+    def test_cgkd_reads_arguments(self):
+        from src.criterions.cgkd import CGKDCriterion
+
+        args = SimpleNamespace(cgkd_alpha=0.3, cgkd_weight=4.0, cgkd_temperature=1.5)
+        criterion = CGKDCriterion(args)
+        self.assertEqual(criterion.alpha, 0.3)
+        self.assertEqual(criterion.weight, 4.0)
+        self.assertEqual(criterion.temperature, 1.5)
+
+    def test_scva_cgkd_joint_builds(self):
+        from src.criterions import SCVACGKDCriterion, build_criterion
+
+        for alias in ("scva_cgkd", "draft"):
+            with self.subTest(alias=alias):
+                args = SimpleNamespace(
+                    kd_loss_type=alias,
+                    # SCVA + CGKD sub-criterion defaults
+                    scva_alpha=0.5, scva_weight=1.0, scva_n_clusters=16,
+                    scva_kmeans_iters=10, scva_attention_layer=-1, scva_min_vision_tokens=4,
+                    cgkd_alpha=0.5, cgkd_weight=1.0, cgkd_temperature=1.0,
+                    # joint formula coefficients (draft notation)
+                    scva_cgkd_ce_weight=1.0, scva_cgkd_lambda_v=0.7, scva_cgkd_lambda_g=0.4,
+                )
+                criterion = build_criterion(args)
+                self.assertIsInstance(criterion, SCVACGKDCriterion)
+                self.assertEqual(criterion.lambda_v, 0.7)
+                self.assertEqual(criterion.lambda_g, 0.4)
+                self.assertEqual(criterion.ce_weight, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

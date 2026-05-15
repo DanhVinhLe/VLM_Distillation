@@ -35,8 +35,8 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --output_dir "${OUTPUT_DIR}" \
   --percent_data 0.15 \
   --lora true \
-  --lora_r 64 \
-  --lora_alpha 64 \
+  --lora_r 128 \
+  --lora_alpha 256 \
   --lora_dropout 0.05 \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 8 \
@@ -51,7 +51,7 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --logging_steps 50 \
   --dataloader_num_workers 2 \
   --max_len 2048 \
-  --image_resolution mid \
+  --image_resolution low \
   --resume_from none \
   --report_to "${REPORT_TO}" \
   --seed 1337 \

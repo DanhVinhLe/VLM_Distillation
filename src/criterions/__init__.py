@@ -1,9 +1,12 @@
 from src.criterions.ce_only import CEOnlyCriterion
+from src.criterions.cgkd import CGKDCriterion
 from src.criterions.default_distillation import (
     DefaultDistillationCriterion,
     default_distillation_criterion,
 )
 from src.criterions.em_kd import EMKDCriterion
+from src.criterions.scva import SCVACriterion
+from src.criterions.scva_cgkd import SCVACGKDCriterion
 from src.criterions.sre import SRECriterion
 from src.criterions.unit_aligned import UnitAlignedDistillationCriterion
 
@@ -18,6 +21,10 @@ criterion_list = {
     "joint": UnitAlignedDistillationCriterion,
     "unit_aligned": UnitAlignedDistillationCriterion,
     "unit_aligned_distillation": UnitAlignedDistillationCriterion,
+    "scva": SCVACriterion,
+    "cgkd": CGKDCriterion,
+    "scva_cgkd": SCVACGKDCriterion,
+    "draft": SCVACGKDCriterion,
 }
 
 
@@ -36,6 +43,9 @@ __all__ = [
     "DefaultDistillationCriterion",
     "CEOnlyCriterion",
     "EMKDCriterion",
+    "SCVACriterion",
+    "CGKDCriterion",
+    "SCVACGKDCriterion",
     "SRECriterion",
     "UnitAlignedDistillationCriterion",
     "build_criterion",

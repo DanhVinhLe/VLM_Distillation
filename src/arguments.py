@@ -97,7 +97,7 @@ class TrainingArguments(TrainingArguments):
     gc_dynamic_limit: int = field(default=125, metadata={"help": "gc_chunk default limit - (128, 125) sized matrices works for Qwen2b. gc_dynamic_limit would be 125 and gc_p|q_chunk_size would be 128"})
     #!new kd loss weight
     kd_weight: float = field(default=0.01, metadata={"help": "weight of kd loss in total loss (used by `default` criterion)"})
-    kd_loss_type: str = field(default="ce_only", metadata={"help": "kd criterion: one of {ce_only, default, default_distillation, emkd, em_kd, sre, joint, unit_aligned}"})
+    kd_loss_type: str = field(default="ce_only", metadata={"help": "kd criterion: one of {ce_only, default, default_distillation, emkd, em_kd, sre, joint, unit_aligned, scva, cgkd, scva_cgkd, draft}"})
     # emkd loss weight
     em_kd_alpha: float = field(default=0.5, metadata={"help": "EM-KD weight for supervised CE loss"})
     em_kd_beta: float = field(default=0.25, metadata={"help": "EM-KD weight for matched vision-logit distillation"})
@@ -113,10 +113,25 @@ class TrainingArguments(TrainingArguments):
     sre_logit_loss_weight: float = field(default=1.0, metadata={"help": "SRE soft-label logit distillation loss weight"})
     sre_temperature: float = field(default=2.0, metadata={"help": "SRE soft-label distillation temperature"})
     sre_use_projector: bool = field(default=False, metadata={"help": "Use configured student-to-teacher projectors for SRE hidden-state losses instead of cropping to min dim."})
-    # joint criterion weights
+    # joint criterion weights (Unit-Aligned = SRE + EM-KD)
     joint_ce_weight: float = field(default=0.5, metadata={"help": "CE weight inside the `joint` criterion; remaining weight goes to averaged KD terms."})
     joint_emkd_weight: float = field(default=1.0, metadata={"help": "Weight of EM-KD term inside the `joint` criterion."})
     joint_sre_weight: float = field(default=1.0, metadata={"help": "Weight of SRE term inside the `joint` criterion."})
+    # SCVA (semantic-cluster visual attention) — see draft.pdf
+    scva_alpha: float = field(default=0.5, metadata={"help": "SCVA weight for supervised CE loss inside the single-method SCVA criterion."})
+    scva_weight: float = field(default=1.0, metadata={"help": "Multiplier for the SCVA KD term inside the single-method SCVA criterion."})
+    scva_n_clusters: int = field(default=16, metadata={"help": "Number of semantic clusters M for SCVA k-means on teacher vision tokens."})
+    scva_kmeans_iters: int = field(default=10, metadata={"help": "Lloyd iterations for SCVA k-means."})
+    scva_attention_layer: int = field(default=-1, metadata={"help": "Index of the attention layer used by SCVA. -1 = last layer."})
+    scva_min_vision_tokens: int = field(default=4, metadata={"help": "Skip SCVA loss for a sample if fewer than this many vision tokens are present."})
+    # CGKD (confidence-gated generative KD) — see draft.pdf
+    cgkd_alpha: float = field(default=0.5, metadata={"help": "CGKD weight for supervised CE loss inside the single-method CGKD criterion."})
+    cgkd_weight: float = field(default=1.0, metadata={"help": "Multiplier for the CGKD KD term inside the single-method CGKD criterion."})
+    cgkd_temperature: float = field(default=1.0, metadata={"help": "Temperature for the CGKD softmax."})
+    # SCVA + CGKD joint criterion (the draft's headline method)
+    scva_cgkd_ce_weight: float = field(default=1.0, metadata={"help": "L_CE coefficient in the SCVA+CGKD joint loss (draft notation)."})
+    scva_cgkd_lambda_v: float = field(default=1.0, metadata={"help": "λ_v: weight on SCVA term in the SCVA+CGKD joint loss."})
+    scva_cgkd_lambda_g: float = field(default=1.0, metadata={"help": "λ_g: weight on CGKD term in the SCVA+CGKD joint loss."})
     ds_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
     deepspeed_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
     # new args for span loss
