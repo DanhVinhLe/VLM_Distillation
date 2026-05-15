@@ -80,7 +80,13 @@ def main():
         lora=True,
     )
 
-    load_kwargs = {}
+    load_kwargs = {
+        # Force eager regardless of what's in the model config. transformers
+        # v5 sometimes ignores config._attn_implementation for Qwen2-VL during
+        # from_pretrained and tries flash_attn_2 — fails on hosts without the
+        # flash_attn package. eager works everywhere and matches training.
+        "attn_implementation": "eager",
+    }
     if args.device_map and args.device_map != "none":
         load_kwargs["device_map"] = args.device_map
 
