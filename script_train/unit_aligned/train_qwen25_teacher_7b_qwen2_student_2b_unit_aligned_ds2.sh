@@ -49,7 +49,7 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --save_strategy epoch \
   --save_total_limit 2 \
   --logging_steps 50 \
-  --dataloader_num_workers 2 \
+  --dataloader_num_workers "${DATALOADER_WORKERS}" \
   --max_len 2048 \
   --image_resolution low \
   --resume_from none \
