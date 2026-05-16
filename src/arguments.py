@@ -142,10 +142,12 @@ class TrainingArguments(TrainingArguments):
     # SCVA (semantic-cluster visual attention) — see draft.pdf
     scva_alpha: float = field(default=0.5, metadata={"help": "SCVA weight for supervised CE loss inside the single-method SCVA criterion."})
     scva_weight: float = field(default=1.0, metadata={"help": "Multiplier for the SCVA KD term inside the single-method SCVA criterion."})
-    scva_n_clusters: int = field(default=16, metadata={"help": "Number of semantic clusters M for SCVA k-means on teacher vision tokens."})
-    scva_kmeans_iters: int = field(default=10, metadata={"help": "Lloyd iterations for SCVA k-means."})
-    scva_attention_layer: int = field(default=-1, metadata={"help": "Index of the attention layer used by SCVA. -1 = last layer."})
+    scva_n_clusters: int = field(default=16, metadata={"help": "Deprecated compatibility knob; SCVA now uses density clusters on teacher vision tokens."})
+    scva_kmeans_iters: int = field(default=10, metadata={"help": "Deprecated compatibility knob; SCVA no longer runs Lloyd k-means."})
     scva_min_vision_tokens: int = field(default=4, metadata={"help": "Skip SCVA loss for a sample if fewer than this many vision tokens are present."})
+    scva_spatial_weight: float = field(default=0.1, metadata={"help": "Spatial-distance weight for SCVA teacher vision clustering."})
+    scva_dbscan_min_samples: int = field(default=8, metadata={"help": "DBSCAN min_samples for SCVA teacher vision clustering."})
+    scva_dbscan_eps_percentile: float = field(default=3.0, metadata={"help": "Percentile of pairwise distances used as DBSCAN eps for SCVA clustering."})
     # CGKD (confidence-gated generative KD) — see draft.pdf
     cgkd_alpha: float = field(default=0.5, metadata={"help": "CGKD weight for supervised CE loss inside the single-method CGKD criterion."})
     cgkd_weight: float = field(default=1.0, metadata={"help": "Multiplier for the CGKD KD term inside the single-method CGKD criterion."})

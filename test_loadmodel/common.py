@@ -198,6 +198,9 @@ def print_batch_shapes(batch):
     for key, value in batch.items():
         if torch.is_tensor(value):
             print(f"{key}: shape={tuple(value.shape)}, dtype={value.dtype}")
+            if key == "image_grid_thw":
+                print(f"sample image_grid_thw[0]: {value[0]}")
+                print(f"sample image_grid_thw[-1]: {value[-1]}")
         else:
             print(f"{key}: {type(value)}")
 

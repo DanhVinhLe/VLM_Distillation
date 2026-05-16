@@ -17,6 +17,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 DEFAULT_SYSTEM_PROMPT = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
 IMAGE_TOKEN = "<image>"
 SRE_MAX_SPANS = 1024
+MAX_MULTIMODAL_TURNS = 3  # tối đa số cặp Q&A được tách từ 1 sample có ảnh
 
 
 def _get_arg(args: Any, name: str, default=None):
@@ -306,6 +307,35 @@ def _normalize_conversations(conversations: Sequence[Dict[str, Any]]) -> List[Di
         normalized.append({"role": role, "value": value})
     return normalized
 
+def _split_multimodal_sample(sample: Dict[str, Any]) -> List[Dict[str, Any]]:
+    conversations = sample["conversations"]
+    system_turns = [t for t in conversations if t["role"] == "system"]
+    qa_turns = [t for t in conversations if t["role"] != "system"]
+
+    pairs: List[tuple] = []
+    i = 0
+    while i + 1 < len(qa_turns):
+        if qa_turns[i]["role"] == "user" and qa_turns[i + 1]["role"] == "assistant":
+            pairs.append((qa_turns[i], qa_turns[i + 1]))
+            i += 2
+        else:
+            i += 1  
+
+    if len(pairs) <= 1:
+        return [sample]
+
+    pairs = pairs[:MAX_MULTIMODAL_TURNS]
+
+    sub_samples = []
+    for idx, (user_turn, assistant_turn) in enumerate(pairs):
+        sub_samples.append(
+            {
+                "id": f"{sample['id']}_t{idx}",
+                "image_path": sample["image_path"],  
+                "conversations": system_turns + [user_turn, assistant_turn],
+            }
+        )
+    return sub_samples
 
 class LazyVlmDistillDataset(Dataset):
     """
@@ -314,6 +344,12 @@ class LazyVlmDistillDataset(Dataset):
     Reads LLaVA-style JSON/JSONL samples, skips samples whose image file is
     missing on disk, and keeps per-model processing out of __getitem__ so the
     collator can apply separate student and teacher processors.
+
+    Multi-turn multimodal samples are split into independent sub-samples of at
+    most MAX_MULTIMODAL_TURNS pairs each (see _split_multimodal_sample). Every
+    sub-sample carries the image so it can stand alone without context from
+    prior turns. Text-only samples and single-turn multimodal samples are kept
+    as-is.
 
     Notes on `lengths` / `modality_lengths`:
         These are used only by LengthGroupedSampler for approximate batch
@@ -354,13 +390,14 @@ class LazyVlmDistillDataset(Dataset):
             conversations = sample.get("conversations")
             if not conversations:
                 continue
-            self.list_data_dict.append(
-                {
-                    "id": sample.get("id"),
-                    "image_path": image_path,
-                    "conversations": _normalize_conversations(conversations),
-                }
-            )
+
+            base_sample = {
+                "id": sample.get("id"),
+                "image_path": image_path,
+                "conversations": _normalize_conversations(conversations),
+            }
+            for sub in _split_multimodal_sample(base_sample):
+                self.list_data_dict.append(sub)
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -601,7 +638,6 @@ class VlmDistillDataCollator:
         """
         processor = processor or self.student_processor
         inputs["labels"] = _make_labels_chatml(
-            inputs["input_ids"], processor, inputs.get("attention_mask")
             inputs["input_ids"], processor, inputs.get("attention_mask")
         )
 

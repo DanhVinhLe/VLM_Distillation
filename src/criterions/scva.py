@@ -20,13 +20,15 @@ formula directly and calls ``SCVACriterion._scva_loss`` to access the pure KD
 component.
 
 Assumptions:
-  - Teacher and student emit the same number of vision tokens per image (same
-    vision encoder family at the same resolution). Samples with n_v_teacher !=
-    n_v_student are skipped from SCVA loss. Cross-architecture pairs are out
-    of scope for this implementation; a Hungarian or NN remapping would be
-    needed to extend.
+  - Teacher vision tokens are clustered by semantic + spatial distance, then
+    each teacher cluster is projected onto the student patch grid by normalized
+    patch coordinates. This allows teacher/student vision-token counts to differ.
   - ``output.attentions`` is populated (forced by ``_force_eager_attention`` in
     src/model/model.py).
+  - Instead of a single attention layer, SCVA selects N_LAYER_PAIRS evenly-spaced
+    student layers in [LAYER_LOW_PCT, LAYER_HIGH_PCT] of the stack and maps each
+    to its teacher counterpart by the layer-count ratio. The per-layer losses are
+    averaged into the final SCVA term.
 """
 
 from __future__ import annotations
@@ -34,12 +36,20 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import hdbscan
+from sklearn.cluster import DBSCAN
 
 
 IGNORE_INDEX = -100
+
+# Default hyper-parameters for the multi-layer selection strategy.
+_DEFAULT_N_LAYER_PAIRS = 4
+_DEFAULT_LAYER_LOW_PCT = 0.4
+_DEFAULT_LAYER_HIGH_PCT = 0.7
 
 
 def _last_hidden(outputs) -> torch.Tensor:
@@ -49,45 +59,212 @@ def _last_hidden(outputs) -> torch.Tensor:
     return hs[-1]
 
 
-def _resolve_layer(attentions, requested: int) -> int:
-    """Resolve a (possibly negative) attention-layer index against the actual
-    number of attention tensors returned by the model."""
-    if attentions is None:
-        return -1
-    n = len(attentions)
-    if n == 0:
-        return -1
-    idx = requested if requested >= 0 else n + requested
-    return max(0, min(idx, n - 1))
+def _resolve_layer_pairs(
+    s_attns,
+    t_attns,
+    n_pairs: int = _DEFAULT_N_LAYER_PAIRS,
+    low_pct: float = _DEFAULT_LAYER_LOW_PCT,
+    high_pct: float = _DEFAULT_LAYER_HIGH_PCT,
+) -> list[tuple[int, int]]:
+    """
+    Select n_pairs evenly-spaced student layers in [low_pct, high_pct] of the
+    student attention stack, then map each to its teacher counterpart by the
+    ratio of total layer counts.
+
+    The number of layers for each model is inferred from the length of its
+    attention tuple (one tensor per layer, as returned by HuggingFace models
+    when output_attentions=True).
+
+    Args:
+        s_attns:   Tuple of student attention tensors (one per layer).
+        t_attns:   Tuple of teacher attention tensors (one per layer).
+        n_pairs:   Number of (student, teacher) layer pairs to return.
+        low_pct:   Lower bound of the selection range as a fraction of total
+                   student layers (default 0.4 → 40%).
+        high_pct:  Upper bound of the selection range as a fraction of total
+                   student layers (default 0.7 → 70%).
+
+    Returns:
+        List of (student_layer_idx, teacher_layer_idx) pairs, deduplicated and
+        sorted by student index.  May be shorter than n_pairs if the index
+        range collapses (e.g. very shallow models).
+    """
+    n_s = len(s_attns)
+    n_t = len(t_attns)
+    if n_s == 0 or n_t == 0:
+        return []
+
+    # Inclusive index range within the student stack
+    lo = int(math.floor(low_pct * n_s))
+    hi = int(math.floor(high_pct * n_s))
+    lo = max(0, min(lo, n_s - 1))
+    hi = max(lo, min(hi, n_s - 1))
+
+    # n_pairs evenly-spaced indices inside [lo, hi]
+    if n_pairs == 1 or lo == hi:
+        student_indices = [lo]
+    else:
+        step = (hi - lo) / (n_pairs - 1)
+        student_indices = sorted(
+            {min(int(round(lo + i * step)), hi) for i in range(n_pairs)}
+        )
+
+    # Map each student index to the teacher index by layer-count ratio.
+    # teacher_layer = round(student_layer * n_t / n_s), clamped to [0, n_t-1].
+    ratio = n_t / n_s
+    pairs: list[tuple[int, int]] = []
+    seen_s: set[int] = set()
+    for s_idx in student_indices:
+        if s_idx in seen_s:
+            continue
+        seen_s.add(s_idx)
+        t_idx = min(int(round(s_idx * ratio)), n_t - 1)
+        pairs.append((s_idx, t_idx))
+
+    return pairs
 
 
-def _kmeans(x: torch.Tensor, n_clusters: int, n_iter: int = 10) -> torch.Tensor:
-    """Pure-torch Lloyd K-means on a (n, d) tensor. Returns int64 [n] assignments."""
-    n, d = x.shape
-    if n_clusters <= 1 or n <= 1:
-        return torch.zeros(n, dtype=torch.long, device=x.device)
-    if n <= n_clusters:
-        # Degenerate: each point is its own (truncated) cluster.
-        return torch.arange(n, dtype=torch.long, device=x.device).clamp(max=n_clusters - 1)
+def _factor_grid(n_tokens: int, aspect: float = 1.0) -> tuple[int, int]:
+    """Infer a patch grid (rows, cols) whose area matches n_tokens."""
+    if n_tokens <= 1:
+        return 1, max(n_tokens, 1)
 
-    init_idx = torch.randperm(n, device=x.device)[:n_clusters]
-    centroids = x[init_idx].clone()
+    side = int(math.sqrt(n_tokens))
+    if side * side == n_tokens:
+        return side, side
 
-    for _ in range(max(int(n_iter), 1)):
-        dists = torch.cdist(x, centroids)            # [n, k]
-        assignments = dists.argmin(dim=-1)           # [n]
-        new_centroids = centroids.clone()
-        for k in range(n_clusters):
-            mask = assignments.eq(k)
-            if mask.any():
-                new_centroids[k] = x[mask].mean(dim=0)
-        # Halt early if stable.
-        if torch.allclose(new_centroids, centroids, atol=1e-4):
-            centroids = new_centroids
-            break
-        centroids = new_centroids
+    aspect = max(float(aspect), 1e-6)
+    best_rows, best_cols, best_score = 1, n_tokens, float("inf")
+    for rows in range(1, int(math.sqrt(n_tokens)) + 1):
+        if n_tokens % rows != 0:
+            continue
+        cols = n_tokens // rows
+        score = abs(math.log((cols / rows) / aspect))
+        if score < best_score:
+            best_rows, best_cols, best_score = rows, cols, score
+    return best_rows, best_cols
 
-    return torch.cdist(x, centroids).argmin(dim=-1)
+
+def _grid_from_inputs(inputs: Dict[str, Any], sample_idx: int, n_tokens: int) -> tuple[int, int]:
+    """Best-effort image-token grid inference for Qwen-style and Llava-style inputs."""
+    image_grid_thw = inputs.get("image_grid_thw")
+    if torch.is_tensor(image_grid_thw) and image_grid_thw.ndim == 2 and sample_idx < image_grid_thw.shape[0]:
+        t, h, w = [int(v) for v in image_grid_thw[sample_idx].detach().cpu().tolist()]
+        raw = max(t * h * w, 1)
+        if raw == n_tokens:
+            return max(t * h, 1), max(w, 1)
+        merge_sq = raw // max(n_tokens, 1)
+        merge = int(math.sqrt(merge_sq))
+        if merge > 0 and merge * merge == merge_sq and h % merge == 0 and w % merge == 0:
+            return max(t * (h // merge), 1), max(w // merge, 1)
+
+    aspect = 1.0
+    return _factor_grid(n_tokens, aspect=aspect)
+
+
+def _patch_centers(n_tokens: int, grid_rows: int, grid_cols: int, device: torch.device) -> torch.Tensor:
+    """Normalized patch centers in [0, 1] x [0, 1]."""
+    if grid_rows * grid_cols != n_tokens:
+        grid_rows, grid_cols = _factor_grid(n_tokens)
+    idx = torch.arange(n_tokens, device=device)
+    rows = torch.div(idx, grid_cols, rounding_mode="floor").float()
+    cols = (idx % grid_cols).float()
+    x = (cols + 0.5) / max(grid_cols, 1)
+    y = (rows + 0.5) / max(grid_rows, 1)
+    return torch.stack([x, y], dim=-1)
+
+
+def _vision_distance_matrix(
+    hidden_states: torch.Tensor,
+    grid_rows: int,
+    grid_cols: int,
+    spatial_weight: float,
+) -> np.ndarray:
+    """Distance matrix matching span_propose_attn: cosine distance + spatial distance."""
+    hidden_norm = F.normalize(hidden_states.float(), p=2, dim=-1)
+    cosine_distance = 1.0 - hidden_norm @ hidden_norm.T
+
+    coords = _patch_centers(hidden_states.size(0), grid_rows, grid_cols, hidden_states.device)
+    spatial_distance = torch.cdist(coords, coords)
+    total = cosine_distance + float(spatial_weight) * spatial_distance
+    total = (total + total.T) / 2
+    total = total.clamp_min(0)
+    total.fill_diagonal_(0)
+    return total.detach().cpu().numpy().astype(np.float64)
+
+
+def _cluster_vision_tokens_dbscan(
+    hidden_states: torch.Tensor,
+    grid_rows: int,
+    grid_cols: int,
+    spatial_weight: float,
+    min_samples: int,
+    eps_percentile: float,
+) -> torch.Tensor:
+    if hidden_states.size(0) <= 1:
+        return torch.zeros(hidden_states.size(0), dtype=torch.long, device=hidden_states.device)
+
+    distance_matrix = _vision_distance_matrix(hidden_states, grid_rows, grid_cols, spatial_weight)
+    upper = distance_matrix[np.triu_indices_from(distance_matrix, k=1)]
+    if upper.size == 0:
+        labels = np.zeros(hidden_states.size(0), dtype=np.int64)
+    else:
+        eps = float(np.percentile(upper, eps_percentile))
+        min_samples = max(1, min(int(min_samples), hidden_states.size(0)))
+        labels = DBSCAN(eps=eps, min_samples=min_samples, metric="precomputed").fit_predict(distance_matrix)
+
+        if np.all(labels == -1):
+            labels = np.zeros(hidden_states.size(0), dtype=np.int64)
+    return torch.tensor(labels, dtype=torch.long, device=hidden_states.device)
+
+
+def _cluster_onehot_from_labels(labels: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    real_mask = labels.ge(0)
+    noise_mask = labels.lt(0)
+
+    real_unique = torch.unique(labels[real_mask], sorted=True)
+
+    remapped = labels.new_full(labels.shape, -1)
+
+    # Remap normal clusters to 0, 1, ..., K-1
+    for new_id, old_id in enumerate(real_unique):
+        remapped[labels.eq(old_id)] = new_id
+
+    # Collect all noise tokens into a single extra cluster
+    if noise_mask.any():
+        noise_cluster_id = int(real_unique.numel())
+        remapped[noise_mask] = noise_cluster_id
+
+    num_clusters = int(real_unique.numel()) + int(noise_mask.any())
+
+    if num_clusters == 0:
+        empty = labels.new_zeros((labels.numel(), 0), dtype=torch.float)
+        return empty, remapped
+
+    onehot = F.one_hot(remapped, num_classes=num_clusters).float()
+    return onehot, remapped
+
+
+def _map_teacher_clusters_to_student_onehot(
+    teacher_labels: torch.Tensor,
+    teacher_grid: tuple[int, int],
+    student_grid: tuple[int, int],
+    n_student_tokens: int,
+    n_clusters: int,
+) -> torch.Tensor:
+    """Map teacher cluster labels onto student patch indices by normalized coordinates."""
+    device = teacher_labels.device
+    student_onehot = torch.zeros(n_student_tokens, n_clusters, device=device)
+    valid_teacher = teacher_labels.ge(0)
+    if n_clusters == 0 or not valid_teacher.any() or n_student_tokens == 0:
+        return student_onehot
+
+    teacher_coords = _patch_centers(teacher_labels.numel(), teacher_grid[0], teacher_grid[1], device)
+    student_coords = _patch_centers(n_student_tokens, student_grid[0], student_grid[1], device)
+    nearest_student = torch.cdist(teacher_coords, student_coords).argmin(dim=-1)
+    for teacher_idx in valid_teacher.nonzero(as_tuple=True)[0]:
+        student_onehot[nearest_student[teacher_idx], teacher_labels[teacher_idx]] = 1.0
+    return student_onehot
 
 
 class SCVACriterion(nn.Module):
@@ -98,10 +275,18 @@ class SCVACriterion(nn.Module):
         self.args = args
         self.alpha = float(getattr(args, "scva_alpha", 0.5))
         self.weight = float(getattr(args, "scva_weight", 1.0))
+        # Kept for CLI/backward compatibility. SCVA now follows span_propose_attn
+        # and uses density clusters instead of fixed-k Lloyd k-means.
         self.n_clusters = max(int(getattr(args, "scva_n_clusters", 16)), 1)
         self.kmeans_iters = max(int(getattr(args, "scva_kmeans_iters", 10)), 1)
-        self.attention_layer = int(getattr(args, "scva_attention_layer", -1))
         self.min_vision_tokens = max(int(getattr(args, "scva_min_vision_tokens", 4)), 1)
+        self.spatial_weight = float(getattr(args, "scva_spatial_weight", 0.1))
+        self.dbscan_min_samples = max(int(getattr(args, "scva_dbscan_min_samples", 8)), 1)
+        self.dbscan_eps_percentile = float(getattr(args, "scva_dbscan_eps_percentile", 3.0))
+        # Multi-layer alignment parameters
+        self.n_layer_pairs = max(int(getattr(args, "scva_n_layer_pairs", _DEFAULT_N_LAYER_PAIRS)), 1)
+        self.layer_low_pct = float(getattr(args, "scva_layer_low_pct", _DEFAULT_LAYER_LOW_PCT))
+        self.layer_high_pct = float(getattr(args, "scva_layer_high_pct", _DEFAULT_LAYER_HIGH_PCT))
 
     def forward(self, distiller: Any, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         student_inputs = batch["student_inputs"]
@@ -158,7 +343,7 @@ class SCVACriterion(nn.Module):
             "valid": 0,
             "skipped_mask": 0,
             "skipped_attention": 0,
-            "skipped_token_mismatch": 0,
+            "skipped_no_clusters": 0,
             "skipped_no_teacher_labels": 0,
             "skipped_no_student_labels": 0,
             "skipped_empty_teacher_response": 0,
@@ -179,15 +364,19 @@ class SCVACriterion(nn.Module):
             counts["skipped_attention"] = int(teacher_hidden.shape[0])
             return teacher_hidden.new_zeros(())
 
-        t_layer = _resolve_layer(t_attns, self.attention_layer)
-        s_layer = _resolve_layer(s_attns, self.attention_layer)
-        if t_layer < 0 or s_layer < 0:
+        # Select n_layer_pairs evenly-spaced student layers in [layer_low_pct,
+        # layer_high_pct] of the stack; map each to its teacher counterpart by
+        # the ratio n_teacher_layers / n_student_layers.
+        layer_pairs = _resolve_layer_pairs(
+            s_attns,
+            t_attns,
+            n_pairs=self.n_layer_pairs,
+            low_pct=self.layer_low_pct,
+            high_pct=self.layer_high_pct,
+        )
+        if not layer_pairs:
             counts["skipped_attention"] = int(teacher_hidden.shape[0])
             return teacher_hidden.new_zeros(())
-
-        # Head-averaged attention. Use float for KL stability.
-        t_attn_avg = t_attns[t_layer].float().mean(dim=1)     # [B, L_t, L_t]
-        s_attn_avg = s_attns[s_layer].float().mean(dim=1)     # [B, L_s, L_s]
 
         t_labels = teacher_inputs.get("labels")
         s_labels = student_inputs.get("labels")
@@ -199,16 +388,11 @@ class SCVACriterion(nn.Module):
             if t_v_mask.sum().item() < self.min_vision_tokens or s_v_mask.sum().item() < self.min_vision_tokens:
                 counts["skipped_mask"] += 1
                 continue
-            if t_v_mask.sum().item() != s_v_mask.sum().item():
-                # Index-aligned SCVA requires same n_v on both sides. Skip
-                # mismatched samples (cross-architecture pairs need a separate
-                # remapping path, out of scope here).
-                counts["skipped_token_mismatch"] += 1
-                continue
 
             t_v_idx = t_v_mask.nonzero(as_tuple=True)[0]
             s_v_idx = s_v_mask.nonzero(as_tuple=True)[0]
-            n_v = int(t_v_idx.numel())
+            n_t_v = int(t_v_idx.numel())
+            n_s_v = int(s_v_idx.numel())
 
             if t_labels is None:
                 counts["skipped_no_teacher_labels"] += 1
@@ -225,39 +409,68 @@ class SCVACriterion(nn.Module):
                 counts["skipped_empty_student_response"] += 1
                 continue
 
-            # K-means cluster teacher vision-token hidden states (no grad).
+            # Cluster teacher vision-token hidden states using the same
+            # semantic + spatial distance idea as span_propose_attn.py, then
+            # map teacher cluster membership onto the student patch grid.
+            # Clustering is done once per sample and shared across all layer pairs.
             with torch.no_grad():
-                cluster_idx = _kmeans(
+                teacher_grid = _grid_from_inputs(teacher_inputs, b, n_t_v)
+                student_grid = _grid_from_inputs(student_inputs, b, n_s_v)
+                cluster_labels = _cluster_vision_tokens_dbscan(
                     teacher_hidden[b, t_v_idx].float(),
-                    self.n_clusters,
-                    self.kmeans_iters,
-                )                                              # [n_v]
-            cluster_onehot = F.one_hot(cluster_idx, num_classes=self.n_clusters).float()  # [n_v, M]
+                    teacher_grid[0],
+                    teacher_grid[1],
+                    self.spatial_weight,
+                    self.dbscan_min_samples,
+                    self.dbscan_eps_percentile,
+                )
+                teacher_cluster_onehot, remapped_labels = _cluster_onehot_from_labels(cluster_labels)
+                student_cluster_onehot = _map_teacher_clusters_to_student_onehot(
+                    remapped_labels,
+                    teacher_grid,
+                    student_grid,
+                    n_s_v,
+                    teacher_cluster_onehot.shape[-1],
+                )
+            if teacher_cluster_onehot.shape[-1] == 0 or student_cluster_onehot.sum().item() == 0:
+                counts["skipped_no_clusters"] += 1
+                continue
 
-            # Teacher response→vision attention rows. Renormalize so each row is a distribution over n_v.
-            t_resp_to_vis = t_attn_avg[b][t_r_idx][:, t_v_idx]                  # [T_t, n_v]
-            t_resp_to_vis = t_resp_to_vis / t_resp_to_vis.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-            s_resp_to_vis = s_attn_avg[b][s_r_idx][:, s_v_idx]                  # [T_s, n_v]
-            s_resp_to_vis = s_resp_to_vis / s_resp_to_vis.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+            # Compute SCVA loss for each (student_layer, teacher_layer) pair and
+            # average the results. Attention tensors are indexed as
+            # attns[layer][batch] to avoid loading all heads into memory at once.
+            pair_losses: list[torch.Tensor] = []
+            for s_layer, t_layer in layer_pairs:
+                # Head-averaged attention rows for this sample. Use float for KL stability.
+                t_attn_b = t_attns[t_layer].float().mean(dim=1)[b]   # [L_t, L_t]
+                s_attn_b = s_attns[s_layer].float().mean(dim=1)[b]   # [L_s, L_s]
 
-            # Align response length: assistant turns should match across student/teacher in a shared batch
-            # but we crop defensively.
-            T_aligned = min(t_resp_to_vis.shape[0], s_resp_to_vis.shape[0])
-            t_resp_to_vis = t_resp_to_vis[:T_aligned]
-            s_resp_to_vis = s_resp_to_vis[:T_aligned]
+                # Slice response→vision sub-matrix and renormalize to a distribution.
+                t_resp_to_vis = t_attn_b[t_r_idx][:, t_v_idx]       # [T_t, n_t_v]
+                t_resp_to_vis = t_resp_to_vis / t_resp_to_vis.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                s_resp_to_vis = s_attn_b[s_r_idx][:, s_v_idx]       # [T_s, n_s_v]
+                s_resp_to_vis = s_resp_to_vis / s_resp_to_vis.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
-            # Cluster-level distributions (T_aligned × M).
-            r_T = (t_resp_to_vis @ cluster_onehot).clamp_min(1e-12)
-            r_S = (s_resp_to_vis @ cluster_onehot).clamp_min(1e-12)
-            r_T = r_T / r_T.sum(dim=-1, keepdim=True)
-            r_S = r_S / r_S.sum(dim=-1, keepdim=True)
+                # Crop to the shorter response length defensively.
+                T_aligned = min(t_resp_to_vis.shape[0], s_resp_to_vis.shape[0])
+                t_resp_to_vis = t_resp_to_vis[:T_aligned]
+                s_resp_to_vis = s_resp_to_vis[:T_aligned]
 
-            # Teacher-attention entropy → confidence weight u_t.
-            h_t = -(t_resp_to_vis.clamp_min(1e-12).log() * t_resp_to_vis).sum(dim=-1)
-            u = (-h_t / max(math.log(max(n_v, 2)), 1e-6)).exp()                # [T_aligned]
+                # Cluster-level distributions (T_aligned × M).
+                r_T = (t_resp_to_vis @ teacher_cluster_onehot).clamp_min(1e-12)
+                r_S = (s_resp_to_vis @ student_cluster_onehot).clamp_min(1e-12)
+                r_T = r_T / r_T.sum(dim=-1, keepdim=True)
+                r_S = r_S / r_S.sum(dim=-1, keepdim=True)
 
-            kl = F.kl_div(r_S.log(), r_T, reduction="none").sum(dim=-1)        # [T_aligned]
-            sample_losses.append((u * kl).sum() / u.sum().clamp_min(1e-6))
+                # Teacher-attention entropy → per-step confidence weight u_t.
+                h_t = -(t_resp_to_vis.clamp_min(1e-12).log() * t_resp_to_vis).sum(dim=-1)
+                u = (-h_t / max(math.log(max(n_t_v, 2)), 1e-6)).exp()   # [T_aligned]
+
+                kl = F.kl_div(r_S.log(), r_T, reduction="none").sum(dim=-1)  # [T_aligned]
+                pair_losses.append((u * kl).sum() / u.sum().clamp_min(1e-6))
+
+            # Average across the selected layer pairs for this sample.
+            sample_losses.append(torch.stack(pair_losses).mean())
             counts["valid"] += 1
 
         if not sample_losses:
