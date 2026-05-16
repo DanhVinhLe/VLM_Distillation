@@ -1,5 +1,6 @@
 import logging
 import os
+from numbers import Number
 from typing import Any, Callable, Dict, Optional
 
 import torch
@@ -64,6 +65,8 @@ class DistillTrainer(Trainer):
         super().__init__(**kwargs)
 
         self._is_ddp = dist.is_initialized()
+        self._loss_metric_sums: Dict[str, float] = {}
+        self._loss_metric_counts: Dict[str, int] = {}
 
         # Accumulators for criterion-side metrics. compute_loss is called once
         # per micro-batch; we average across grad_accum_steps and emit at the
@@ -105,7 +108,11 @@ class DistillTrainer(Trainer):
             # The criterion receives the full batch, which includes
             # student_inputs["labels"] for assistant-position gating.
             loss_output = model(self.criterion, inputs)
-            loss = loss_output["loss"] if isinstance(loss_output, dict) else loss_output
+            if isinstance(loss_output, dict):
+                self._record_loss_metrics(loss_output)
+                loss = loss_output["loss"]
+            else:
+                loss = loss_output
 
             # Accumulate component metrics (everything in the dict except "loss")
             # for the next call to `log()`. This is how SCVA/CGKD/hard_loss/
@@ -160,6 +167,51 @@ class DistillTrainer(Trainer):
             )
 
         return cleaned
+
+    # ------------------------------------------------------------------
+    # Logging — include criterion loss components
+    # ------------------------------------------------------------------
+
+    def _record_loss_metrics(self, loss_output: Dict[str, Any]) -> None:
+        for name, value in loss_output.items():
+            if name == "loss":
+                continue
+
+            scalar = self._to_log_scalar(value)
+            if scalar is None:
+                continue
+
+            self._loss_metric_sums[name] = self._loss_metric_sums.get(name, 0.0) + scalar
+            self._loss_metric_counts[name] = self._loss_metric_counts.get(name, 0) + 1
+
+    @staticmethod
+    def _to_log_scalar(value: Any) -> Optional[float]:
+        if torch.is_tensor(value):
+            if value.numel() != 1:
+                return None
+            value = value.detach().float()
+            if not torch.isfinite(value):
+                return None
+            return float(value.item())
+
+        if isinstance(value, Number):
+            value = float(value)
+            if value != value or value in (float("inf"), float("-inf")):
+                return None
+            return value
+
+        return None
+
+    def log(self, logs: Dict[str, float], *args, **kwargs) -> None:
+        if self._loss_metric_sums:
+            for name, total in self._loss_metric_sums.items():
+                count = self._loss_metric_counts.get(name, 0)
+                if count > 0 and name not in logs:
+                    logs[name] = total / count
+            self._loss_metric_sums.clear()
+            self._loss_metric_counts.clear()
+
+        return super().log(logs, *args, **kwargs)
 
     # ------------------------------------------------------------------
     # Optimizer — separate LR for projectors when configured

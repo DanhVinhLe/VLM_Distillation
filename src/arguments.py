@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from transformers import TrainingArguments
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -59,10 +59,10 @@ class DataArguments:
     encode_output_path: str = field(default=None, metadata={"help": "encode output path"})
     max_len: int = field(default=None, metadata={"help": "The maximum total input sequence length after tokenization. Use with caution, since it may truncate text prompts due to large image lengths."},)
     embedding_type: str = field(default="", metadata={"help": "embedding type"})
-    image_resolution: str = field(default=None, metadata={"help": "for models i.e. LLaVA-next and Qwen, resize images first, none means using original image resolution. This is only works when `--resize_use_processor false`."})
-    resize_use_processor: bool = field(default=False, metadata={"help": "Resize visual inputs insides processor, e.g. Qwen2VLImageProcessor, instead of by our code."})
-    resize_min_pixels: int = field(default=28*28*4, metadata={"help": "The min pixels of the image to resize the image. This is only works when `--resize_use_processor true`."})
-    resize_max_pixels: int = field(default=28*28*1280, metadata={"help": "The max pixels of the image to resize the image. This is only works when `--resize_use_processor true`."})
+    image_resolution: str = field(default=None, metadata={"help": "Optional coarse pre-resize cap before processor-specific image preprocessing."})
+    resize_use_processor: Optional[bool] = field(default=None, metadata={"help": "Override processor image resizing. Leave unset to keep the model processor default; set false only if image sizes are already processor-compatible."})
+    resize_min_pixels: int = field(default=28*28*4, metadata={"help": "Optional processor min_pixels override for processors that support it."})
+    resize_max_pixels: int = field(default=28*28*1280, metadata={"help": "Optional processor max_pixels override for processors that support it."})
     image_decay_factor: float = field(default=None, metadata={"help": "The image decay factor for resizing temporal images"})
     num_hardneg: int = field(default=0, metadata={"help": "hard negative number"})
     #! new args
@@ -98,6 +98,28 @@ class TrainingArguments(TrainingArguments):
     #!new kd loss weight
     kd_weight: float = field(default=0.01, metadata={"help": "weight of kd loss in total loss (used by `default` criterion)"})
     kd_loss_type: str = field(default="ce_only", metadata={"help": "kd criterion: one of {ce_only, default, default_distillation, emkd, em_kd, sre, joint, unit_aligned, scva, cgkd, scva_cgkd, draft}"})
+    # dwa-kd loss weight/config
+    ce_rate: float = field(default=1.0, metadata={"help": "DWA-KD supervised CE loss weight"})
+    kd_rate: float = field(default=1.0, metadata={"help": "DWA-KD dual-space KD loss weight"})
+    dtw_rate: float = field(default=0.0, metadata={"help": "DWA-KD soft-DTW loss weight"})
+    kd_temperature: float = field(default=1.0, metadata={"help": "DWA-KD student/teacher KD temperature"})
+    teacher_temperature: float = field(default=1.0, metadata={"help": "Additional DWA-KD teacher temperature"})
+    kd_objective: str = field(default="forward_kl", metadata={"help": "DWA-KD divergence objective"})
+    adaptive_kl_alpha: float = field(default=0.5, metadata={"help": "DWA-KD adaptive KL tail probability threshold"})
+    skew_lambda: float = field(default=0.5, metadata={"help": "DWA-KD skewed KL interpolation weight"})
+    kd_warmup_steps: int = field(default=300, metadata={"help": "DWA-KD confidence-gated KD warmup steps"})
+    dtw_warmup_steps: int = field(default=0, metadata={"help": "DWA-KD DTW loss warmup steps"})
+    dtw_gamma: float = field(default=2.0, metadata={"help": "DWA-KD SoftDTW gamma"})
+    dtw_gamma_start: float = field(default=2.0, metadata={"help": "DWA-KD SoftDTW gamma schedule start"})
+    dtw_gamma_end: float = field(default=0.8, metadata={"help": "DWA-KD SoftDTW gamma schedule end"})
+    dtw_gamma_steps: int = field(default=3570, metadata={"help": "DWA-KD SoftDTW gamma schedule steps"})
+    dtw_band_width: float = field(default=5.0, metadata={"help": "DWA-KD adaptive DTW band base width"})
+    dtw_band_penalty: float = field(default=1.0, metadata={"help": "DWA-KD adaptive DTW band penalty"})
+    dtw_band_center_blend: float = field(default=0.7, metadata={"help": "DWA-KD blend between CMA and linear DTW band centers"})
+    dtw_band_entropy_coef: float = field(default=2.0, metadata={"help": "DWA-KD entropy coefficient for adaptive DTW band width"})
+    dtw_band_warmup_steps: int = field(default=0, metadata={"help": "DWA-KD adaptive DTW band penalty warmup"})
+    dtw_band_source: str = field(default="cma", metadata={"help": "DWA-KD adaptive DTW band source"})
+    only_save_projector: bool = field(default=False, metadata={"help": "DWA-KD trains projector-only objective"})
     # emkd loss weight
     em_kd_alpha: float = field(default=0.5, metadata={"help": "EM-KD weight for supervised CE loss"})
     em_kd_beta: float = field(default=0.25, metadata={"help": "EM-KD weight for matched vision-logit distillation"})

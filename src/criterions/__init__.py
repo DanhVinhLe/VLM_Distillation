@@ -4,7 +4,17 @@ from src.criterions.default_distillation import (
     DefaultDistillationCriterion,
     default_distillation_criterion,
 )
-from src.criterions.em_kd import EMKDCriterion
+from src.criterions.dwa_kd import DWAKDCriterion
+try:
+    from src.criterions.em_kd import EMKDCriterion
+except ModuleNotFoundError as exc:
+    if exc.name != "scipy":
+        raise
+
+    class EMKDCriterion:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError("EM-KD requires scipy. Install requirements.txt before using kd_loss_type='em_kd'.")
+
 from src.criterions.scva import SCVACriterion
 from src.criterions.scva_cgkd import SCVACGKDCriterion
 from src.criterions.sre import SRECriterion
@@ -18,6 +28,8 @@ criterion_list = {
     "emkd": EMKDCriterion,
     "em_kd": EMKDCriterion,
     "sre": SRECriterion,
+    "dwa_kd": DWAKDCriterion,
+    "dwakd": DWAKDCriterion,
     "joint": UnitAlignedDistillationCriterion,
     "unit_aligned": UnitAlignedDistillationCriterion,
     "unit_aligned_distillation": UnitAlignedDistillationCriterion,
@@ -41,6 +53,7 @@ def build_criterion(training_args):
 
 __all__ = [
     "DefaultDistillationCriterion",
+    "DWAKDCriterion",
     "CEOnlyCriterion",
     "EMKDCriterion",
     "SCVACriterion",

@@ -44,7 +44,7 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --gradient_accumulation_steps "${GRAD_ACCUM}" \
   --num_train_epochs 1 \
   --learning_rate 1e-5 \
-  --weight_decay 0.0 \
+  --weight_decay 0.01 \
   --warmup_ratio 0.03 \
   --lr_scheduler_type cosine \
   --bf16 true \

@@ -602,6 +602,7 @@ class VlmDistillDataCollator:
         processor = processor or self.student_processor
         inputs["labels"] = _make_labels_chatml(
             inputs["input_ids"], processor, inputs.get("attention_mask")
+            inputs["input_ids"], processor, inputs.get("attention_mask")
         )
 
     def __call__(self, instances: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
