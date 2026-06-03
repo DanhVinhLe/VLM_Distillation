@@ -41,6 +41,7 @@ class ModelArguments:
     projector_config_path: str = field(default=None, metadata={"help": "projector config path, if None, no projector will be used"})
     projector_path: str = field(default=None, metadata={"help": "projector model path, if None, no projector will be used"})
     projector_lr: float = field(default=1e-4, metadata={"help": "projector learning rate"})
+    proj_dim: int = field(default=512, metadata={"help": "shared projection dim used by projector config suffix `p`"})
     student_hidden_dim: int = field(default=896, metadata={"help": "student hidden dim"})
     teacher_hidden_dim: int = field(default=1536, metadata={"help": "teacher hidden dim"})
     load_pretrained_lora: bool = field(default=False, metadata={"help": "load pretrained lora model for student"})
@@ -97,7 +98,7 @@ class TrainingArguments(TrainingArguments):
     gc_dynamic_limit: int = field(default=125, metadata={"help": "gc_chunk default limit - (128, 125) sized matrices works for Qwen2b. gc_dynamic_limit would be 125 and gc_p|q_chunk_size would be 128"})
     #!new kd loss weight
     kd_weight: float = field(default=0.01, metadata={"help": "weight of kd loss in total loss (used by `default` criterion)"})
-    kd_loss_type: str = field(default="ce_only", metadata={"help": "kd criterion: one of {ce_only, default, default_distillation, emkd, em_kd, sre, joint, unit_aligned, scva, cgkd, scva_cgkd, draft}"})
+    kd_loss_type: str = field(default="ce_only", metadata={"help": "kd criterion: one of {ce_only, default, default_distillation, emkd, em_kd, sre, joint, unit_aligned, scva, cgkd, scva_cgkd, draft, mcw_kd, dskd_v2_with_eta}"})
     # dwa-kd loss weight/config
     ce_rate: float = field(default=1.0, metadata={"help": "DWA-KD supervised CE loss weight"})
     kd_rate: float = field(default=1.0, metadata={"help": "DWA-KD dual-space KD loss weight"})
@@ -120,6 +121,24 @@ class TrainingArguments(TrainingArguments):
     dtw_band_warmup_steps: int = field(default=0, metadata={"help": "DWA-KD adaptive DTW band penalty warmup"})
     dtw_band_source: str = field(default="cma", metadata={"help": "DWA-KD adaptive DTW band source"})
     only_save_projector: bool = field(default=False, metadata={"help": "DWA-KD trains projector-only objective"})
+    # DSKDv2 with ETA config
+    init_t2s_projector: bool = field(default=False, metadata={"help": "Initialize DSKDv2 t2s projector via LM-head pseudo-inverse"})
+    init_s2t_projector: bool = field(default=False, metadata={"help": "Use DSKDv2 dynamic s2t pseudo-inverse projection"})
+    dskd_topk_vocab: int = field(default=-1, metadata={"help": "Top-k vocab used for DSKDv2 projector initialization; -1 disables"})
+    topk_vocab: int = field(default=-1, metadata={"help": "Alias for DSKDv2 top-k vocab"})
+    only_stu_kd: bool = field(default=False, metadata={"help": "DSKDv2: only apply student-space KD"})
+    only_tea_kd: bool = field(default=False, metadata={"help": "DSKDv2: only apply teacher-space KD"})
+    t2s_agreement: float = field(default=1.0, metadata={"help": "DSKDv2 t2s agreement threshold"})
+    # MCW-KD text-only OT loss config
+    top_k_vocab: Optional[int] = field(default=None, metadata={"help": "Alias for MCW-KD top-k sorted logits"})
+    mcw_top_k_vocab: int = field(default=128, metadata={"help": "MCW-KD top-k sorted logits used for text-token OT cost"})
+    mcw_tau_seq: float = field(default=1.0, metadata={"help": "MCW-KD sequence-level logit temperature"})
+    mcw_window_size: int = field(default=4, metadata={"help": "MCW-KD hidden-context window size"})
+    mcw_total_steps: int = field(default=0, metadata={"help": "MCW-KD interpolation steps; 0 falls back to full teacher interpolation"})
+    mcw_ot_logits_rate: float = field(default=1.0, metadata={"help": "MCW-KD OT logits loss weight"})
+    mcw_ot_hidden_rate: float = field(default=1.0, metadata={"help": "MCW-KD OT hidden loss weight"})
+    mcw_sinkhorn_alpha: float = field(default=0.1, metadata={"help": "MCW-KD ETP/Sinkhorn alpha"})
+    mcw_sinkhorn_iter: int = field(default=100, metadata={"help": "MCW-KD ETP/Sinkhorn max iterations"})
     # emkd loss weight
     em_kd_alpha: float = field(default=0.5, metadata={"help": "EM-KD weight for supervised CE loss"})
     em_kd_beta: float = field(default=0.25, metadata={"help": "EM-KD weight for matched vision-logit distillation"})

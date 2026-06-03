@@ -51,6 +51,7 @@ class Distiller(nn.Module):
 
         self.set_projector()
         self.load_projectors_if_needed()
+        self.init_dskd_projectors_if_needed()
         print_master("Projectors set.")
 
     # HF Trainer's save_model + push_to_hub reach for model.config / name_or_path /
@@ -135,7 +136,11 @@ class Distiller(nn.Module):
             with open(self.model_args.projector_config_path) as f:
                 projector_config = json.load(f)
 
-            dim_map = {"s": self.student_hidden_dim, "t": self.teacher_hidden_dim}
+            dim_map = {
+                "s": self.student_hidden_dim,
+                "t": self.teacher_hidden_dim,
+                "p": self.model_args.proj_dim,
+            }
 
             for name, cfg in projector_config.items():
                 if not cfg.get("enabled", False):
@@ -148,6 +153,8 @@ class Distiller(nn.Module):
                 for p in parts:
                     if p == "relu":
                         parsed.append("relu")
+                    elif p.isdigit():
+                        parsed.append(int(p))
                     else:
                         suffix = p[-1]
                         coef = int(p[:-1]) if len(p) > 1 and p[:-1].isdigit() else 1
@@ -229,3 +236,83 @@ class Distiller(nn.Module):
             if os.path.exists(proj_path):
                 proj.load_state_dict(torch.load(proj_path, map_location="cpu"))
                 print_master(f"Projector {i} loaded from {proj_path}")
+
+    def init_dskd_projectors_if_needed(self):
+        kd_loss_type = (getattr(self.training_args, "kd_loss_type", "") or "").lower()
+        if kd_loss_type not in {"dskd_v2_with_eta", "dskdv2_with_eta", "dskd_v2", "dskdv2"}:
+            return
+        if not (getattr(self.training_args, "init_t2s_projector", False) or getattr(self.training_args, "init_s2t_projector", False)):
+            return
+        if not isinstance(self.projectors, nn.ModuleDict):
+            raise RuntimeError("DSKDv2 projector initialization requires named projectors `t2s` and `s2t`.")
+        if "t2s" not in self.projectors or "s2t" not in self.projectors:
+            raise RuntimeError("DSKDv2 projector initialization requires `t2s` and `s2t` in projector_config_path.")
+
+        student_head = self._output_head_weight(self.student).detach().transpose(0, 1).float()
+        teacher_head = self._output_head_weight(self.teacher).detach().transpose(0, 1).float()
+        student_tokenizer = getattr(self.get_student_processor(), "tokenizer", self.get_student_processor())
+        teacher_tokenizer = getattr(self.get_teacher_processor(), "tokenizer", self.get_teacher_processor())
+
+        if student_tokenizer.get_vocab().items() == teacher_tokenizer.get_vocab().items():
+            part_student_head = student_head
+            part_teacher_head = teacher_head
+            self.student_overlap_token_ids = None
+        else:
+            student_vocab = {token.replace("Ġ", "▁"): idx for token, idx in student_tokenizer.get_vocab().items()}
+            teacher_vocab = {token.replace("Ġ", "▁"): idx for token, idx in teacher_tokenizer.get_vocab().items()}
+            overlap_tokens = [token for token in student_vocab if token in teacher_vocab]
+            if not overlap_tokens:
+                raise RuntimeError("DSKDv2 projector initialization found no overlap tokens between student and teacher.")
+            student_overlap_token_ids = torch.tensor([student_vocab[token] for token in overlap_tokens], dtype=torch.long, device=student_head.device)
+            teacher_overlap_token_ids = torch.tensor([teacher_vocab[token] for token in overlap_tokens], dtype=torch.long, device=teacher_head.device)
+            part_student_head = student_head.index_select(1, student_overlap_token_ids)
+            part_teacher_head = teacher_head.index_select(1, teacher_overlap_token_ids)
+            self.student_overlap_token_ids = student_overlap_token_ids.cpu()
+            print_master(f"DSKDv2 projector init overlap tokens: {len(overlap_tokens)}")
+
+        topk_vocab = int(getattr(self.training_args, "dskd_topk_vocab", getattr(self.training_args, "topk_vocab", -1)) or -1)
+        if topk_vocab != -1:
+            part_student_head = part_student_head[:, :topk_vocab]
+            part_teacher_head = part_teacher_head[:, :topk_vocab]
+            if getattr(self, "student_overlap_token_ids", None) is not None:
+                self.student_overlap_token_ids = self.student_overlap_token_ids[:topk_vocab]
+
+        if getattr(self.training_args, "init_t2s_projector", False):
+            part_student_head_pinv = torch.linalg.pinv(part_student_head)
+            init_t2s = (part_teacher_head @ part_student_head_pinv).transpose(0, 1)
+            self._copy_linear_weight(self.projectors["t2s"], init_t2s)
+            print_master("DSKDv2 initialized t2s projector with LM-head pseudo-inverse.")
+
+        if getattr(self.training_args, "init_s2t_projector", False):
+            self.part_teacher_head_pinv = torch.linalg.pinv(part_teacher_head).detach().cpu()
+            print_master("DSKDv2 cached teacher-head pseudo-inverse for dynamic s2t projection.")
+
+    @staticmethod
+    def _output_head_weight(model: nn.Module) -> torch.Tensor:
+        encoder = getattr(model, "encoder", model)
+        if hasattr(encoder, "get_output_embeddings"):
+            head = encoder.get_output_embeddings()
+            if head is not None:
+                return head.weight
+        if hasattr(encoder, "lm_head"):
+            return encoder.lm_head.weight
+        raise RuntimeError(f"Could not find output head for model: {type(model)}")
+
+    @staticmethod
+    def _copy_linear_weight(projector: nn.Module, weight: torch.Tensor) -> None:
+        linear = None
+        if isinstance(projector, nn.Linear):
+            linear = projector
+        elif isinstance(projector, nn.Sequential):
+            for module in projector:
+                if isinstance(module, nn.Linear):
+                    linear = module
+                    break
+        if linear is None:
+            raise RuntimeError("Expected projector to contain an nn.Linear for DSKDv2 initialization.")
+        if tuple(linear.weight.shape) != tuple(weight.shape):
+            raise RuntimeError(f"Projector weight shape {tuple(linear.weight.shape)} does not match init {tuple(weight.shape)}.")
+        with torch.no_grad():
+            linear.weight.copy_(weight.to(device=linear.weight.device, dtype=linear.weight.dtype))
+            if linear.bias is not None:
+                linear.bias.zero_()

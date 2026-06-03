@@ -67,6 +67,7 @@ class DistillTrainer(Trainer):
         self._is_ddp = dist.is_initialized()
         self._loss_metric_sums: Dict[str, float] = {}
         self._loss_metric_counts: Dict[str, int] = {}
+        self._latest_loss_metrics: Dict[str, float] = {}
 
         # Accumulators for criterion-side metrics. compute_loss is called once
         # per micro-batch; we average across grad_accum_steps and emit at the
@@ -110,6 +111,7 @@ class DistillTrainer(Trainer):
             loss_output = model(self.criterion, inputs)
             if isinstance(loss_output, dict):
                 self._record_loss_metrics(loss_output)
+                self._update_tqdm_postfix()
                 loss = loss_output["loss"]
             else:
                 loss = loss_output
@@ -173,6 +175,7 @@ class DistillTrainer(Trainer):
     # ------------------------------------------------------------------
 
     def _record_loss_metrics(self, loss_output: Dict[str, Any]) -> None:
+        latest = {}
         for name, value in loss_output.items():
             if name == "loss":
                 continue
@@ -183,6 +186,40 @@ class DistillTrainer(Trainer):
 
             self._loss_metric_sums[name] = self._loss_metric_sums.get(name, 0.0) + scalar
             self._loss_metric_counts[name] = self._loss_metric_counts.get(name, 0) + 1
+            latest[name] = scalar
+        self._latest_loss_metrics = latest
+
+    def _update_tqdm_postfix(self) -> None:
+        if not self._latest_loss_metrics:
+            return
+
+        display_keys = (
+            "supervised_loss",
+            "kd_loss",
+            "mcw_ot_logits_loss",
+            "mcw_ot_hidden_loss",
+            "t2s_ce_loss",
+            "t2s_kd_loss",
+            "s2t_kd_loss",
+            "align_ratio",
+            "t2s_agreement",
+        )
+        postfix = {
+            key: f"{self._latest_loss_metrics[key]:.4g}"
+            for key in display_keys
+            if key in self._latest_loss_metrics
+        }
+        if not postfix:
+            return
+
+        for callback in getattr(self.callback_handler, "callbacks", []):
+            training_bar = getattr(callback, "training_bar", None)
+            if training_bar is not None:
+                try:
+                    training_bar.set_postfix(postfix, refresh=False)
+                except TypeError:
+                    training_bar.set_postfix(postfix)
+                break
 
     @staticmethod
     def _to_log_scalar(value: Any) -> Optional[float]:
