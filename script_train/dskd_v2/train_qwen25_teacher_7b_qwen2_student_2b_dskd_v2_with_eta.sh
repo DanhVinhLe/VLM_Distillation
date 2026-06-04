@@ -5,17 +5,17 @@ PROJECT_DIR="/workspace/ComfyUI/models/instantid/VLM_Distillation"
 TRAIN_PY="${PROJECT_DIR}/train.py"
 TORCHRUN="${PROJECT_DIR}/.venv/bin/torchrun"
 
-STUDENT_MODEL="Qwen/Qwen2.5-VL-3B-Instruct"
-TEACHER_MODEL="Qwen/Qwen3-VL-8B-Instruct"
+STUDENT_MODEL="Qwen/Qwen2-VL-2B-Instruct"
+TEACHER_MODEL="Qwen/Qwen2.5-VL-7B-Instruct"
 DATA_PATH="${PROJECT_DIR}/train_data/llava_v1_5_mix665k.json"
 IMAGE_DIR="${PROJECT_DIR}/train_data"
-OUTPUT_DIR="${PROJECT_DIR}/outputs/qwen3_teacher_8b_qwen25_student_3b_dskd_v2_with_eta"
+OUTPUT_DIR="${PROJECT_DIR}/outputs/qwen25_teacher_7b_qwen2_student_2b_dskd_v2_with_eta"
 PROJECTOR_CONFIG="${PROJECT_DIR}/config/dskd_v2_projectors.json"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 MASTER_PORT="${MASTER_PORT:-29501}"
-STUDENT_HIDDEN_DIM="${STUDENT_HIDDEN_DIM:-2048}"
-TEACHER_HIDDEN_DIM="${TEACHER_HIDDEN_DIM:-4096}"
+STUDENT_HIDDEN_DIM="${STUDENT_HIDDEN_DIM:-1536}"
+TEACHER_HIDDEN_DIM="${TEACHER_HIDDEN_DIM:-3584}"
 
 cd "${PROJECT_DIR}"
 
@@ -50,13 +50,13 @@ fi
   --bf16 true \
   --save_strategy epoch \
   --save_total_limit 2 \
-  --logging_steps 100 \
+  --logging_steps 10 \
   --dataloader_num_workers 2 \
   --max_len 2048 \
   --image_resolution low \
   --resume_from none \
   --report_to none \
-  --kd_loss_type "dskd_v2_with_eta" \
+  --kd_loss_type "dskd_v2" \
   --kd_objective "forward_kl" \
   --kd_rate 0.5 \
   --kd_temperature 1.0 \

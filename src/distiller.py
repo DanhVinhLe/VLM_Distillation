@@ -284,7 +284,8 @@ class Distiller(nn.Module):
             print_master("DSKDv2 initialized t2s projector with LM-head pseudo-inverse.")
 
         if getattr(self.training_args, "init_s2t_projector", False):
-            self.part_teacher_head_pinv = torch.linalg.pinv(part_teacher_head).detach().cpu()
+            pinv_dtype = next(self.projectors["s2t"].parameters()).dtype
+            self.part_teacher_head_pinv = torch.linalg.pinv(part_teacher_head).to(dtype=pinv_dtype).detach()
             print_master("DSKDv2 cached teacher-head pseudo-inverse for dynamic s2t projection.")
 
     @staticmethod

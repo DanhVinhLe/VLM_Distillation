@@ -56,7 +56,7 @@ fi
   --image_resolution low \
   --resume_from none \
   --report_to none \
-  --kd_loss_type "dskd_v2_with_eta" \
+  --kd_loss_type "dskd_v2" \
   --kd_objective "forward_kl" \
   --kd_rate 0.5 \
   --kd_temperature 1.0 \

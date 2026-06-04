@@ -143,6 +143,8 @@ class DWAKDCriterion(VariousDivergence):
             "dtw_loss": dtw_loss.detach(),
             "weighted_dtw_loss": weighted_dtw_loss.detach(),
             "token_accuracy": self.compute_token_accuracy(student_outputs.logits, labels).detach(),
+            "token_correct": self.compute_token_correct(student_outputs.logits, labels).detach(),
+            "token_count": self.compute_token_count(student_outputs.logits, labels).detach(),
         }
         result.update({name: value.detach() for name, value in extra.items()})
         return result

@@ -177,38 +177,55 @@ class DistillTrainer(Trainer):
     def _record_loss_metrics(self, loss_output: Dict[str, Any]) -> None:
         latest = {}
         for name, value in loss_output.items():
-            if name == "loss":
-                continue
-
             scalar = self._to_log_scalar(value)
             if scalar is None:
                 continue
 
+            latest[name] = scalar
+            if name == "loss":
+                continue
+
             self._loss_metric_sums[name] = self._loss_metric_sums.get(name, 0.0) + scalar
             self._loss_metric_counts[name] = self._loss_metric_counts.get(name, 0) + 1
-            latest[name] = scalar
         self._latest_loss_metrics = latest
 
     def _update_tqdm_postfix(self) -> None:
         if not self._latest_loss_metrics:
             return
 
-        display_keys = (
+        priority_keys = (
+            "loss",
             "supervised_loss",
+            "hard_loss",
             "kd_loss",
-            "mcw_ot_logits_loss",
-            "mcw_ot_hidden_loss",
             "t2s_ce_loss",
             "t2s_kd_loss",
             "s2t_kd_loss",
-            "align_ratio",
-            "t2s_agreement",
+            "dtw_loss",
+            "weighted_dtw_loss",
+            "mcw_ot_logits_loss",
+            "mcw_ot_hidden_loss",
+            "scva_loss",
+            "cgkd_loss",
+            "sre_kd_loss",
+            "sre_span_loss",
+            "sre_geom_loss",
+            "sre_logit_loss",
+            "response_kd_loss",
+            "vision_kd_loss",
+            "vision_logit_loss",
+            "affinity_loss",
         )
-        postfix = {
-            key: f"{self._latest_loss_metrics[key]:.4g}"
-            for key in display_keys
-            if key in self._latest_loss_metrics
-        }
+
+        loss_keys = [
+            key
+            for key in self._latest_loss_metrics
+            if key == "loss" or key.endswith("_loss") or "loss" in key
+        ]
+        ordered_keys = [key for key in priority_keys if key in loss_keys]
+        ordered_keys.extend(sorted(key for key in loss_keys if key not in set(ordered_keys)))
+
+        postfix = {key: f"{self._latest_loss_metrics[key]:.4g}" for key in ordered_keys}
         if not postfix:
             return
 

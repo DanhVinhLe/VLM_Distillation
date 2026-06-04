@@ -240,6 +240,8 @@ class MCWKDCriterion(VariousDivergence):
             "mcw_ot_logits_loss": ot_logits_loss.detach(),
             "mcw_ot_hidden_loss": ot_hidden_loss.detach(),
             "token_accuracy": self.compute_token_accuracy(student_outputs.logits, labels).detach(),
+            "token_correct": self.compute_token_correct(student_outputs.logits, labels).detach(),
+            "token_count": self.compute_token_count(student_outputs.logits, labels).detach(),
         }
         result.update({name: value.detach() for name, value in extra.items()})
         result.update({name: value.detach() for name, value in ot_logits_extra.items()})

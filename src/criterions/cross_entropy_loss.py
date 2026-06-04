@@ -42,12 +42,23 @@ class CrossEntropyLoss(nn.Module):
             reduction="sum",
         )
 
-    def compute_token_accuracy(self, logits: torch.Tensor, target: torch.Tensor, shift: bool = True) -> torch.Tensor:
+    def compute_token_correct(self, logits: torch.Tensor, target: torch.Tensor, shift: bool = True) -> torch.Tensor:
         if shift:
             logits, target = self.shift_logits_and_labels(logits, target)
         target = target.to(device=logits.device)
         mask = target.ne(self.padding_id)
         return (logits.argmax(dim=-1).eq(target) & mask).sum()
+
+    def compute_token_count(self, logits: torch.Tensor, target: torch.Tensor, shift: bool = True) -> torch.Tensor:
+        if shift:
+            _logits, target = self.shift_logits_and_labels(logits, target)
+        target = target.to(device=logits.device)
+        return target.ne(self.padding_id).sum()
+
+    def compute_token_accuracy(self, logits: torch.Tensor, target: torch.Tensor, shift: bool = True) -> torch.Tensor:
+        correct = self.compute_token_correct(logits, target, shift=shift).float()
+        total = self.compute_token_count(logits, target, shift=shift).float().clamp_min(1.0)
+        return correct / total
 
     def shift_logits_and_labels(
         self,
