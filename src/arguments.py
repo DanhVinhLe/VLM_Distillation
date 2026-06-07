@@ -175,6 +175,12 @@ class TrainingArguments(TrainingArguments):
     scva_cgkd_ce_weight: float = field(default=1.0, metadata={"help": "L_CE coefficient in the SCVA+CGKD joint loss (draft notation)."})
     scva_cgkd_lambda_v: float = field(default=1.0, metadata={"help": "λ_v: weight on SCVA term in the SCVA+CGKD joint loss."})
     scva_cgkd_lambda_g: float = field(default=1.0, metadata={"help": "λ_g: weight on CGKD term in the SCVA+CGKD joint loss."})
+    # SCVA + SIC joint criterion (SCVA plus Semantic Intervention Consistency)
+    scva_sic_ce_weight: float = field(default=1.0, metadata={"help": "L_CE coefficient in the SCVA+SIC joint loss."})
+    scva_sic_lambda_v: float = field(default=1.0, metadata={"help": "λ_v: weight on SCVA term in the SCVA+SIC joint loss."})
+    scva_sic_lambda_sic: float = field(default=1.0, metadata={"help": "λ_sic: weight on Semantic Intervention Consistency term in the SCVA+SIC joint loss."})
+    sic_max_clusters: int = field(default=0, metadata={"help": "Max semantic clusters per sample for SIC intervention forwards; <=0 uses all clusters."})
+    sic_use_projector: bool = field(default=False, metadata={"help": "Use the first configured student-to-teacher projector to align SIC semantic directions; otherwise crop to min dim."})
     ds_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
     deepspeed_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
     # new args for span loss
