@@ -63,9 +63,9 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --scva_n_clusters 16 \
   --scva_kmeans_iters 10 \
   --scva_min_vision_tokens 4 \
-  --scva_sic_ce_weight "${SCVA_SIC_CE_WEIGHT:-0.7}" \
+  --scva_sic_ce_weight "${SCVA_SIC_CE_WEIGHT:-1.0}" \
   --scva_sic_lambda_v "${SCVA_SIC_LAMBDA_V:-0.3}" \
   --scva_sic_lambda_sic "${SCVA_SIC_LAMBDA_SIC:-0.3}" \
-  --sic_max_clusters "${SIC_MAX_CLUSTERS:-4}" \
-  --sic_use_projector "${SIC_USE_PROJECTOR:-false}" \
+  --sic_max_clusters "${SIC_MAX_CLUSTERS:-16}" \
+  --sic_use_projector "${SIC_USE_PROJECTOR:-true}" \
   ${HUB_FLAGS[@]+"${HUB_FLAGS[@]}"}
