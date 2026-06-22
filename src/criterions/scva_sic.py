@@ -27,6 +27,7 @@ import torch.nn.functional as F
 from src.criterions.scva import (
     IGNORE_INDEX,
     SCVACriterion,
+    _patch_centers,
     _cluster_onehot_from_labels,
     _cluster_vision_tokens_dbscan,
     _grid_from_inputs,
@@ -113,6 +114,89 @@ def _align_dims(
     return student_direction[..., :dim].float(), teacher_direction[..., :dim].float()
 
 
+def _nearest_neighbor_merge_map(cluster_features: torch.Tensor, num_regions: int) -> torch.Tensor:
+    """Greedily merge nearest clusters until exactly ``num_regions`` remain.
+
+    This keeps the operation local to one image and CPU/Python-control-flow only;
+    cluster assignment tensors produced from the returned map stay on the model
+    device.  The mapping is deterministic, which is important for reproducible
+    DDP runs.
+    """
+    n_clusters = int(cluster_features.shape[0])
+    groups = [[idx] for idx in range(n_clusters)]
+    centroids = F.normalize(cluster_features.float(), p=2, dim=-1)
+
+    while len(groups) > num_regions:
+        distance = torch.cdist(centroids, centroids)
+        distance.fill_diagonal_(float("inf"))
+        flat_idx = int(distance.argmin().item())
+        left = flat_idx // distance.shape[1]
+        right = flat_idx % distance.shape[1]
+        if right < left:
+            left, right = right, left
+
+        groups[left].extend(groups[right])
+        del groups[right]
+        centroids = torch.stack([cluster_features[group].float().mean(dim=0) for group in groups], dim=0)
+        centroids = F.normalize(centroids, p=2, dim=-1)
+
+    merge_map = torch.empty(n_clusters, dtype=torch.long, device=cluster_features.device)
+    for new_id, group in enumerate(groups):
+        merge_map[group] = new_id
+    return merge_map
+
+
+def _fixed_region_onehots(
+    teacher_hidden: torch.Tensor,
+    remapped_teacher_labels: torch.Tensor,
+    teacher_grid: tuple[int, int],
+    student_grid: tuple[int, int],
+    n_student_tokens: int,
+    num_regions: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return teacher/student cluster membership with a fixed region dimension.
+
+    DBSCAN can naturally produce a different number of clusters per image.  SIC
+    performs one intervention forward per region, so multi-GPU training needs a
+    fixed region count to keep DDP ranks issuing the same number of synchronized
+    student forwards.  We merge over-produced clusters with nearest-neighbor
+    agglomeration and pad under-produced clusters with empty dummy regions.
+    """
+    device = remapped_teacher_labels.device
+    valid = remapped_teacher_labels.ge(0)
+    if not valid.any():
+        empty_t = torch.zeros(remapped_teacher_labels.numel(), num_regions, device=device)
+        empty_s = torch.zeros(n_student_tokens, num_regions, device=device)
+        return empty_t, empty_s
+
+    labels = remapped_teacher_labels.clone()
+    n_clusters = int(labels[valid].max().item()) + 1
+
+    if n_clusters > num_regions:
+        coords = _patch_centers(labels.numel(), teacher_grid[0], teacher_grid[1], device)
+        cluster_features = []
+        for cluster_id in range(n_clusters):
+            members = labels.eq(cluster_id)
+            hidden_centroid = teacher_hidden[members].float().mean(dim=0)
+            coord_centroid = coords[members].float().mean(dim=0)
+            cluster_features.append(torch.cat([F.normalize(hidden_centroid, p=2, dim=0), coord_centroid], dim=0))
+        merge_map = _nearest_neighbor_merge_map(torch.stack(cluster_features, dim=0), num_regions)
+        labels[valid] = merge_map[labels[valid]]
+        n_clusters = num_regions
+
+    teacher_onehot = torch.zeros(labels.numel(), num_regions, device=device)
+    if n_clusters > 0:
+        teacher_onehot[valid] = F.one_hot(labels[valid], num_classes=num_regions).float()
+    student_onehot = _map_teacher_clusters_to_student_onehot(
+        labels,
+        teacher_grid,
+        student_grid,
+        n_student_tokens,
+        num_regions,
+    )
+    return teacher_onehot, student_onehot
+
+
 class SCVASICCriterion(nn.Module):
     """Joint SCVA + SIC criterion using one full forward plus cluster interventions."""
 
@@ -124,6 +208,10 @@ class SCVASICCriterion(nn.Module):
         self.lambda_v = float(getattr(args, "scva_sic_lambda_v", 1.0))
         self.lambda_sic = float(getattr(args, "scva_sic_lambda_sic", 1.0))
         self.max_clusters = int(getattr(args, "sic_max_clusters", 0))
+        requested_regions = int(getattr(args, "sic_num_regions", 0))
+        if requested_regions <= 0:
+            requested_regions = self.max_clusters if self.max_clusters > 0 else int(getattr(args, "scva_n_clusters", 16))
+        self.num_regions = max(requested_regions, 1)
         self.use_projector = bool(getattr(args, "sic_use_projector", False))
 
     def forward(self, distiller: Any, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
@@ -235,21 +323,20 @@ class SCVASICCriterion(nn.Module):
                     self.scva.dbscan_min_samples,
                     self.scva.dbscan_eps_percentile,
                 )
-                teacher_cluster_onehot, remapped_labels = _cluster_onehot_from_labels(cluster_labels)
-                student_cluster_onehot = _map_teacher_clusters_to_student_onehot(
+                _, remapped_labels = _cluster_onehot_from_labels(cluster_labels)
+                teacher_cluster_onehot, student_cluster_onehot = _fixed_region_onehots(
+                    teacher_hidden[b, t_v_idx].float(),
                     remapped_labels,
                     teacher_grid,
                     student_grid,
                     n_s_v,
-                    teacher_cluster_onehot.shape[-1],
+                    self.num_regions,
                 )
 
             n_clusters = int(teacher_cluster_onehot.shape[-1])
             if n_clusters == 0 or student_cluster_onehot.sum().item() == 0:
                 counts["skipped_no_clusters"] += 1
                 continue
-            if self.max_clusters > 0:
-                n_clusters = min(n_clusters, self.max_clusters)
 
             t_full_log_probs = F.log_softmax(t_logits[b : b + 1].float(), dim=-1)
             s_full_log_probs = F.log_softmax(s_logits[b : b + 1].float(), dim=-1)
@@ -265,7 +352,11 @@ class SCVASICCriterion(nn.Module):
             t_one = _slice_batch(teacher_inputs, b, batch_size)
             s_one = _slice_batch(student_inputs, b, batch_size)
             cluster_losses = []
-            for m in range(n_clusters):
+            for m in range(self.num_regions):
+                is_dummy_region = (
+                    not teacher_cluster_onehot[:, m].bool().any()
+                    and not student_cluster_onehot[:, m].bool().any()
+                )
                 t_masked_inputs = _with_masked_cluster_embeds(
                     t_one,
                     teacher_hidden0[b : b + 1],
@@ -295,7 +386,10 @@ class SCVASICCriterion(nn.Module):
                 s_direction, t_direction = _align_dims(s_direction, t_direction, projector)
 
                 cosine_loss = 1.0 - F.cosine_similarity(s_direction, t_direction, dim=-1, eps=1e-6)
-                cluster_losses.append((u.to(cosine_loss.device) * cosine_loss).sum())
+                cluster_loss = (u.to(cosine_loss.device) * cosine_loss).sum()
+                if is_dummy_region:
+                    cluster_loss = cluster_loss * 0.0
+                cluster_losses.append(cluster_loss)
 
             if cluster_losses:
                 sample_losses.append(torch.stack(cluster_losses).sum() / u.sum().clamp_min(1e-6))

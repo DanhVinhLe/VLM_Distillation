@@ -279,6 +279,7 @@ class SCVACriterion(nn.Module):
         # and uses density clusters instead of fixed-k Lloyd k-means.
         self.n_clusters = max(int(getattr(args, "scva_n_clusters", 16)), 1)
         self.kmeans_iters = max(int(getattr(args, "scva_kmeans_iters", 10)), 1)
+        self.attention_layer = int(getattr(args, "scva_attention_layer", -1))
         self.min_vision_tokens = max(int(getattr(args, "scva_min_vision_tokens", 4)), 1)
         self.spatial_weight = float(getattr(args, "scva_spatial_weight", 0.1))
         self.dbscan_min_samples = max(int(getattr(args, "scva_dbscan_min_samples", 8)), 1)
