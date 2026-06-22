@@ -95,6 +95,56 @@ class KDPlumbingTests(unittest.TestCase):
                 self.assertEqual(criterion.lambda_g, 0.4)
                 self.assertEqual(criterion.ce_weight, 1.0)
 
+    def test_scva_sic_reads_fixed_region_argument(self):
+        from src.criterions.scva_sic import SCVASICCriterion
+
+        args = SimpleNamespace(
+            scva_n_clusters=16,
+            scva_sic_ce_weight=1.0,
+            scva_sic_lambda_v=0.3,
+            scva_sic_lambda_sic=0.3,
+            sic_num_regions=6,
+            sic_max_clusters=2,
+            sic_use_projector=False,
+        )
+
+        criterion = SCVASICCriterion(args)
+
+        self.assertEqual(criterion.num_regions, 6)
+        self.assertEqual(criterion.max_clusters, 2)
+
+    def test_scva_sic_fixed_region_onehots_merge_and_pad(self):
+        import torch
+        from src.criterions.scva_sic import _fixed_region_onehots
+
+        teacher_hidden = torch.eye(5)
+        labels = torch.arange(5)
+        teacher_onehot, student_onehot = _fixed_region_onehots(
+            teacher_hidden=teacher_hidden,
+            remapped_teacher_labels=labels,
+            teacher_grid=(1, 5),
+            student_grid=(1, 5),
+            n_student_tokens=5,
+            num_regions=3,
+        )
+
+        self.assertEqual(tuple(teacher_onehot.shape), (5, 3))
+        self.assertEqual(tuple(student_onehot.shape), (5, 3))
+        self.assertTrue(torch.allclose(teacher_onehot.sum(dim=-1), torch.ones(5)))
+
+        teacher_onehot, student_onehot = _fixed_region_onehots(
+            teacher_hidden=teacher_hidden[:2],
+            remapped_teacher_labels=torch.tensor([0, 1]),
+            teacher_grid=(1, 2),
+            student_grid=(1, 2),
+            n_student_tokens=2,
+            num_regions=4,
+        )
+
+        self.assertEqual(tuple(teacher_onehot.shape), (2, 4))
+        self.assertEqual(tuple(student_onehot.shape), (2, 4))
+        self.assertTrue(torch.equal(teacher_onehot[:, 2:], torch.zeros(2, 2)))
+
 
 if __name__ == "__main__":
     unittest.main()
