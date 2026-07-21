@@ -13,7 +13,6 @@ SCRIPTS=(
   "train_qwen3_teacher_8b_qwen25_student_3b_dwa_kd.sh"
   "train_qwen3_teacher_8b_qwen25_student_3b_emkd.sh"
   "train_qwen3_teacher_8b_qwen25_student_3b_mcw_kd.sh"
-  "train_qwen3_teacher_8b_qwen25_student_3b_scva_cgkd.sh"
   "train_qwen3_teacher_8b_qwen25_student_3b_sre.sh"
 )
 

@@ -15,7 +15,6 @@ SCRIPTS=(
   "train_qwen25_teacher_7b_qwen2_student_2b_emkd.sh"
   "train_qwen25_teacher_7b_qwen2_student_2b_mcw_kd.sh"
   "train_qwen25_teacher_7b_qwen2_student_2b_scva.sh"
-  "train_qwen25_teacher_7b_qwen2_student_2b_scva_cgkd.sh"
   "train_qwen25_teacher_7b_qwen2_student_2b_sre.sh"
 )
 
