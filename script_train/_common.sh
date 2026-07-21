@@ -15,7 +15,7 @@ if [[ -z "${RUN_NAME:-}" ]]; then
   exit 1
 fi
 
-PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[1]}")/../.." && pwd)}"
+PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 ENV_FILE="${PROJECT_DIR}/.env"
 if [[ -f "${ENV_FILE}" ]]; then
   set -a

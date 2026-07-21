@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# SCVA + CGKD joint — the draft.pdf headline method, single-GPU.
+# SCVA + CGKD joint — the draft.pdf headline method, 8-GPU.
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/workspace/ComfyUI/models/instantid/VLM_Distill}"
+PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 TRAIN_PY="${PROJECT_DIR}/train.py"
 TORCHRUN="${PROJECT_DIR}/.venv/bin/torchrun"
 
@@ -12,13 +12,13 @@ DATA_PATH="${DATA_PATH:-${PROJECT_DIR}/train_data/llava_v1_5_mix665k.json}"
 IMAGE_DIR="${IMAGE_DIR:-${PROJECT_DIR}/train_data}"
 RUN_NAME="${RUN_NAME:-qwen3_teacher_4b_fastvlm_student_05b_scva_cgkd}"
 OUTPUT_DIR="${PROJECT_DIR}/outputs/${RUN_NAME}"
-PERCENT_DATA="${PERCENT_DATA:-0.1}"
+PERCENT_DATA="${PERCENT_DATA:-1.0}"
 PER_DEVICE_BS="${PER_DEVICE_BS:-2}"
 GRAD_ACCUM="${GRAD_ACCUM:-8}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-2}"
 SAVE_STEPS="${SAVE_STEPS:-1000}"
 
-NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 MASTER_PORT="${MASTER_PORT:-29501}"
 
 cd "${PROJECT_DIR}"

@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# CGKD-only — DeepSpeed ZeRO-2 multi-GPU.
+# CE-only baseline (teacher in batch, KD signal discarded).
+# Companion baselines are stored in this teacher-student directory.
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/workspace/ComfyUI/models/instantid/VLM_Distill}"
+PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 TRAIN_PY="${PROJECT_DIR}/train.py"
 TORCHRUN="${PROJECT_DIR}/.venv/bin/torchrun"
-DS_CONFIG="${DS_CONFIG:-${PROJECT_DIR}/configs/ds_z2.json}"
 
 STUDENT_MODEL="${STUDENT_MODEL:-Qwen/Qwen2-VL-2B-Instruct}"
 TEACHER_MODEL="${TEACHER_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
 DATA_PATH="${DATA_PATH:-${PROJECT_DIR}/train_data/llava_v1_5_mix665k.json}"
 IMAGE_DIR="${IMAGE_DIR:-${PROJECT_DIR}/train_data}"
-RUN_NAME="${RUN_NAME:-qwen25_teacher_7b_qwen2_student_2b_cgkd_ds2}"
+RUN_NAME="${RUN_NAME:-qwen25_teacher_7b_qwen2_student_2b_ce_only}"
 OUTPUT_DIR="${PROJECT_DIR}/outputs/${RUN_NAME}"
-PERCENT_DATA="${PERCENT_DATA:-0.10}"
+PERCENT_DATA="${PERCENT_DATA:-1.0}"
 PER_DEVICE_BS="${PER_DEVICE_BS:-2}"
 GRAD_ACCUM="${GRAD_ACCUM:-8}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-2}"
 SAVE_STEPS="${SAVE_STEPS:-1000}"
 
-NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 MASTER_PORT="${MASTER_PORT:-29501}"
 
 cd "${PROJECT_DIR}"
@@ -60,9 +60,5 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --resume_from none \
   --report_to "${REPORT_TO}" \
   --seed 1337 \
-  --kd_loss_type cgkd \
-  --cgkd_alpha 0.5 \
-  --cgkd_weight 1.0 \
-  --cgkd_temperature 1.0 \
-  --ds_config "${DS_CONFIG}" \
+  --kd_loss_type ce_only \
   ${HUB_FLAGS[@]+"${HUB_FLAGS[@]}"}
