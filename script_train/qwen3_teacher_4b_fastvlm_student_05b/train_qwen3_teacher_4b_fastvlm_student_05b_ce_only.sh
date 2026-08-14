@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# SCVA-only (single-method draft.pdf component) — 8-GPU.
+# CE-only baseline for Qwen3-VL-4B teacher and FastVLM-0.5B student.
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 TRAIN_PY="${PROJECT_DIR}/train.py"
 TORCHRUN="${PROJECT_DIR}/.venv/bin/torchrun"
 
-STUDENT_MODEL="${STUDENT_MODEL:-Qwen/Qwen2-VL-2B-Instruct}"
-TEACHER_MODEL="${TEACHER_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
+STUDENT_MODEL="${STUDENT_MODEL:-KamilaMila/FastVLM-0.5B}"
+TEACHER_MODEL="${TEACHER_MODEL:-Qwen/Qwen3-VL-4B-Instruct}"
 DATA_PATH="${DATA_PATH:-${PROJECT_DIR}/train_data/llava_v1_5_mix665k.json}"
 IMAGE_DIR="${IMAGE_DIR:-${PROJECT_DIR}/train_data}"
-RUN_NAME="${RUN_NAME:-qwen25_teacher_7b_qwen2_student_2b_scva}"
+RUN_NAME="${RUN_NAME:-qwen3_teacher_4b_fastvlm_student_05b_ce_only}"
 OUTPUT_DIR="${PROJECT_DIR}/outputs/${RUN_NAME}"
 PERCENT_DATA="${PERCENT_DATA:-1.0}"
-PER_DEVICE_BS="${PER_DEVICE_BS:-2}"
-GRAD_ACCUM="${GRAD_ACCUM:-8}"
+PER_DEVICE_BS="${PER_DEVICE_BS:-1}"
+GRAD_ACCUM="${GRAD_ACCUM:-1}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-2}"
 SAVE_STEPS="${SAVE_STEPS:-1000}"
 
@@ -59,11 +59,5 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --resume_from none \
   --report_to "${REPORT_TO}" \
   --seed 1337 \
-  --kd_loss_type scva \
-  --scva_alpha 0.5 \
-  --scva_weight 1.0 \
-  --scva_n_clusters 16 \
-  --scva_kmeans_iters 10 \
-  --scva_attention_layer -1 \
-  --scva_min_vision_tokens 4 \
+  --kd_loss_type ce_only \
   ${HUB_FLAGS[@]+"${HUB_FLAGS[@]}"}

@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
-# SCVA-only — DeepSpeed ZeRO-2 multi-GPU.
-# Launch:   NPROC_PER_NODE=2 bash script_train/scva/train_..._scva_ds2.sh
+# CE-only baseline for Qwen3-VL-8B teacher and Qwen2.5-VL-3B student.
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/workspace/ComfyUI/models/instantid/VLM_Distill}"
+PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 TRAIN_PY="${PROJECT_DIR}/train.py"
 TORCHRUN="${PROJECT_DIR}/.venv/bin/torchrun"
-DS_CONFIG="${DS_CONFIG:-${PROJECT_DIR}/configs/ds_z2.json}"
 
-STUDENT_MODEL="${STUDENT_MODEL:-Qwen/Qwen2-VL-2B-Instruct}"
-TEACHER_MODEL="${TEACHER_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
+STUDENT_MODEL="${STUDENT_MODEL:-Qwen/Qwen2.5-VL-3B-Instruct}"
+TEACHER_MODEL="${TEACHER_MODEL:-Qwen/Qwen3-VL-8B-Instruct}"
 DATA_PATH="${DATA_PATH:-${PROJECT_DIR}/train_data/llava_v1_5_mix665k.json}"
 IMAGE_DIR="${IMAGE_DIR:-${PROJECT_DIR}/train_data}"
-RUN_NAME="${RUN_NAME:-qwen25_teacher_7b_qwen2_student_2b_scva_ds2}"
+RUN_NAME="${RUN_NAME:-qwen3_teacher_8b_qwen25_student_3b_ce_only}"
 OUTPUT_DIR="${PROJECT_DIR}/outputs/${RUN_NAME}"
-PERCENT_DATA="${PERCENT_DATA:-0.10}"
-PER_DEVICE_BS="${PER_DEVICE_BS:-2}"
-GRAD_ACCUM="${GRAD_ACCUM:-8}"
+PERCENT_DATA="${PERCENT_DATA:-1.0}"
+PER_DEVICE_BS="${PER_DEVICE_BS:-1}"
+GRAD_ACCUM="${GRAD_ACCUM:-1}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-2}"
 SAVE_STEPS="${SAVE_STEPS:-1000}"
 
-NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 MASTER_PORT="${MASTER_PORT:-29501}"
 
 cd "${PROJECT_DIR}"
@@ -61,12 +59,5 @@ source "${PROJECT_DIR}/script_train/_common.sh"
   --resume_from none \
   --report_to "${REPORT_TO}" \
   --seed 1337 \
-  --kd_loss_type scva \
-  --scva_alpha 0.5 \
-  --scva_weight 1.0 \
-  --scva_n_clusters 16 \
-  --scva_kmeans_iters 10 \
-  --scva_attention_layer -1 \
-  --scva_min_vision_tokens 4 \
-  --ds_config "${DS_CONFIG}" \
+  --kd_loss_type ce_only \
   ${HUB_FLAGS[@]+"${HUB_FLAGS[@]}"}
