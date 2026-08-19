@@ -209,6 +209,36 @@ def _resolve_image_path(base_dir: Path, image_value: Any) -> Optional[str]:
     return str(image_path)
 
 
+def _iter_image_values(sample: Dict[str, Any]) -> List[Any]:
+    """Return all explicitly declared image values from a JSON sample."""
+    for key in ("image", "image_path", "images"):
+        if key not in sample:
+            continue
+        value = sample.get(key)
+        if value is None or value == "":
+            return []
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]
+    return []
+
+
+def _resolve_sample_image_paths(base_dir: Path, sample: Dict[str, Any]) -> List[str]:
+    """Resolve every image path declared by a sample.
+
+    The dataset currently attaches only one image to each conversation, but some
+    JSON records can still contain a list of image paths.  We validate the whole
+    declared list so a sample with any missing image is filtered before lazy
+    loading reaches ``__getitem__``.
+    """
+    resolved_paths = []
+    for image_value in _iter_image_values(sample):
+        image_path = _resolve_image_path(base_dir, image_value)
+        if image_path is not None:
+            resolved_paths.append(image_path)
+    return resolved_paths
+
+
 _RESOLUTION_MAX_DIM: Dict[str, int] = {
     "high": 1344,
     "mid":   672,
@@ -381,12 +411,16 @@ class LazyVlmDistillDataset(Dataset):
         self.list_data_dict = []
         self.skipped_missing_images = 0
         for sample in samples:
-            image_path = _resolve_image_path(self.base_dir, sample.get("image", ""))
-            # Skip sample if image field is present but the file does not exist
-            # (covers failed downloads, wrong paths, etc.)
-            if image_path is not None and not os.path.exists(image_path):
+            image_paths = _resolve_sample_image_paths(self.base_dir, sample)
+            # Skip multimodal samples as soon as any declared image file is
+            # absent.  This prevents lazy PIL loading from crashing later and
+            # also catches list-valued image fields where a non-first image is
+            # missing.  Samples without an image field remain valid text-only
+            # samples.
+            if any(not os.path.isfile(image_path) for image_path in image_paths):
                 self.skipped_missing_images += 1
                 continue
+            image_path = image_paths[0] if image_paths else None
             conversations = sample.get("conversations")
             if not conversations:
                 continue
