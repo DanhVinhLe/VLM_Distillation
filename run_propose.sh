@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+python -m venv vlm
+source vlm/bin/activate
+bash download_datatrain.sh
+bash script_train/qwen3_teacher_4b_fastvlm_student_05b/train_qwen3_teacher_4b_fastvlm_student_05b_scva_sic.sh
+bash script_train/qwen3_teacher_4b_fastvlm_student_05b/train_qwen2_teacher_7b_fastvlm_student_scva.sh
